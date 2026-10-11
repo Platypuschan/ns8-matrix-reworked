@@ -19,11 +19,16 @@ fi
 systemctl --user stop postgresql.service || true
 podman volume rm --force postgres-data
 
+rm -rf restore
 mkdir -p restore
+# The init script runs as the "postgres" user of the image, which cannot
+# read the private (600) dump: give it a readable copy in the private state
+# directory. The entrypoint runs only *.sh and *.sql* files on its own.
+install -m 644 postgresql.pg_dump restore/all.pgdump
 cat > restore/50restore.sh <<'EOS'
 # The data directory was just initialized; the role "postgres" exists
 # already, so its CREATE ROLE line fails harmlessly.
-psql -v ON_ERROR_STOP=0 -U postgres -f /tmp/postgresql.pg_dump >/dev/null
+psql -v ON_ERROR_STOP=0 -U postgres -f /docker-entrypoint-initdb.d/all.pgdump >/dev/null
 ec=$?
 docker_temp_server_stop
 exit $ec
@@ -34,7 +39,6 @@ podman run \
     --network=none \
     --volume=./restore:/docker-entrypoint-initdb.d/:Z \
     --volume=postgres-data:/var/lib/postgresql/data:Z \
-    --volume=./postgresql.pg_dump:/tmp/postgresql.pg_dump:ro,Z \
     --env-file=<(python3 -c 'import json; print("POSTGRES_PASSWORD=" + json.load(open("matrix.json"))["secrets"]["postgres_password"])') \
     --env=POSTGRES_USER=postgres \
     --env=TZ=UTC \

@@ -39,4 +39,6 @@ for unit in units:
 for name in os.listdir("."):
     if name.startswith(matrix_setup.RESTART_FLAG.format("")):
         os.remove(name)
-subprocess.run(["ensure-admin"], check=True)
+# A stopped module stays stopped; the next configure-module creates the admin
+if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "synapse.service"]).returncode == 0:
+    subprocess.run(["ensure-admin"], check=True)

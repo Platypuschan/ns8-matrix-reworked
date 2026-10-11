@@ -4,7 +4,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
-# Create the local server admin account once Synapse answers.
+# Wait until Synapse answers (configure-module may have restarted it), then
+# create the local server admin account once.
 
 import os
 import sys
@@ -14,7 +15,7 @@ import matrix_runtime
 import matrix_setup
 
 settings = matrix_setup.read_settings()
-if not settings.get("host") or os.path.exists(matrix_runtime.ADMIN_FLAG):
+if not settings.get("host"):
     sys.exit(0)
 port_map = matrix_setup.ports()
 matrix_runtime.wait_for_synapse(port_map["synapse"])
