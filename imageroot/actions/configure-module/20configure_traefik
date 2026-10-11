@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Traefik routes: the homeserver, the optional web apps and, if the server
+# name differs from the homeserver host, its /.well-known/matrix path.
+
+import os
+import sys
+
+import agent
+import agent.tasks
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_setup
+
+settings = matrix_setup.read_settings()
+port_map = matrix_setup.ports()
+module_id = os.environ["MODULE_ID"]
+traefik = agent.resolve_agent_id("traefik@node")
+if traefik is None:
+    print("Default Traefik instance of this node not found", file=sys.stderr)
+    sys.exit(2)
+
+
+def set_route(name, port, host, **extra):
+    response = agent.tasks.run(agent_id=traefik, action="set-route", data={
+        "instance": f"{module_id}-{name}",
+        "url": f"http://127.0.0.1:{port}",
+        "host": host,
+        "http2https": settings["http2https"],
+        "lets_encrypt": settings["lets_encrypt"],
+        **extra,
+    })
+    agent.assert_exp(response["exit_code"] == 0, f"Traefik set-route {name} failed")
+
+
+def delete_route(name):
+    # Missing routes are fine
+    agent.tasks.run(agent_id=traefik, action="delete-route", data={"instance": f"{module_id}-{name}"})
+
+
+set_route("synapse", port_map["synapse"], settings["host"])
+
+for app in matrix_setup.WEB_APPS:
+    host = settings[f"{app}_host"]
+    if host:
+        set_route(app, port_map[app], host)
+    else:
+        delete_route(app)
+
+if matrix_setup.serves_wellknown(settings):
+    # wellknown.service has no MIME type for the extension-less files
+    set_route(
+        "wellknown", port_map["wellknown"], settings["server_name"],
+        path="/.well-known/matrix", strip_prefix=False,
+        headers={"response": {"Content-Type": "application/json"}},
+    )
+else:
+    delete_route("wellknown")

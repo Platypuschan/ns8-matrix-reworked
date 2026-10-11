@@ -1,0 +1,33 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# Ketesa Synapse admin UI (static web app), published on 127.0.0.1 for Traefik.
+#
+
+[Unit]
+Description=Ketesa Synapse admin UI
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+EnvironmentFile=%E/state/ports.env
+WorkingDirectory=%E/state
+Restart=always
+TimeoutStopSec=30
+ExecStartPre=/bin/rm -f %t/ketesa.pid %t/ketesa.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/ketesa.pid \
+    --cidfile %t/ketesa.ctr-id --cgroups=no-conmon \
+    --replace -d --name ketesa \
+    --publish 127.0.0.1:${KETESA_PORT}:8080 \
+    --volume %E/state/web/ketesa.json:/var/public/config.json:ro,Z \
+    ${KETESA_IMAGE}
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/ketesa.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/ketesa.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/ketesa.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

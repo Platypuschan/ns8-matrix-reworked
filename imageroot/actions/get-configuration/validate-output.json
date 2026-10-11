@@ -1,0 +1,187 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Get Matrix settings",
+    "$id": "http://nethserver.org/json-schema/task/output/matrix-reworked/get-configuration",
+    "description": "Settings, URLs and the admin account of the Matrix module",
+    "examples": [
+        {
+            "server_name": "example.org",
+            "host": "matrix.example.org",
+            "lets_encrypt": true,
+            "http2https": true,
+            "user_domain": "ad.example.org",
+            "federation": true,
+            "wellknown_on_server_name": true,
+            "element_host": "chat.example.org",
+            "cinny_host": "",
+            "ketesa_host": "",
+            "mail_from": "",
+            "max_upload_mb": 100,
+            "bridges": [
+                "whatsapp"
+            ],
+            "telegram_api_id": "",
+            "telegram_api_hash_set": false,
+            "configured": true,
+            "user_domains": [
+                "ad.example.org"
+            ],
+            "available_bridges": [
+                {
+                    "id": "whatsapp",
+                    "name": "WhatsApp",
+                    "image": "dock.mau.dev/mautrix/whatsapp:v0.2609.0"
+                }
+            ],
+            "wellknown_server": "{\"m.server\": \"matrix.example.org:443\"}",
+            "wellknown_client": "{\"m.homeserver\": {\"base_url\": \"https://matrix.example.org\"}}",
+            "admin_user": "@matrixadmin:example.org",
+            "admin_password": "secret",
+            "homeserver_url": "https://matrix.example.org/",
+            "element_url": "https://chat.example.org/",
+            "cinny_url": "",
+            "ketesa_url": ""
+        }
+    ],
+    "type": "object",
+    "required": [
+        "server_name",
+        "host",
+        "lets_encrypt",
+        "http2https",
+        "user_domain",
+        "federation",
+        "wellknown_on_server_name",
+        "element_host",
+        "cinny_host",
+        "ketesa_host",
+        "mail_from",
+        "max_upload_mb",
+        "bridges",
+        "telegram_api_id",
+        "telegram_api_hash_set",
+        "configured",
+        "user_domains",
+        "available_bridges",
+        "wellknown_server",
+        "wellknown_client",
+        "admin_user",
+        "admin_password",
+        "homeserver_url",
+        "element_url",
+        "cinny_url",
+        "ketesa_url"
+    ],
+    "properties": {
+        "server_name": {
+            "type": "string",
+            "description": "Matrix server name; empty before the first configuration"
+        },
+        "host": {
+            "type": "string"
+        },
+        "lets_encrypt": {
+            "type": "boolean"
+        },
+        "http2https": {
+            "type": "boolean"
+        },
+        "user_domain": {
+            "type": "string"
+        },
+        "federation": {
+            "type": "boolean"
+        },
+        "wellknown_on_server_name": {
+            "type": "boolean"
+        },
+        "element_host": {
+            "type": "string"
+        },
+        "cinny_host": {
+            "type": "string"
+        },
+        "ketesa_host": {
+            "type": "string"
+        },
+        "mail_from": {
+            "type": "string"
+        },
+        "max_upload_mb": {
+            "type": "integer"
+        },
+        "bridges": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "telegram_api_id": {
+            "type": "string"
+        },
+        "telegram_api_hash_set": {
+            "type": "boolean",
+            "description": "A Telegram API hash is stored (it is never returned)"
+        },
+        "configured": {
+            "type": "boolean"
+        },
+        "user_domains": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "User domains of the cluster"
+        },
+        "available_bridges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "name",
+                    "image"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "image": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "wellknown_server": {
+            "type": "string",
+            "description": "Content of https://<server_name>/.well-known/matrix/server if the server name differs from host"
+        },
+        "wellknown_client": {
+            "type": "string",
+            "description": "Content of https://<server_name>/.well-known/matrix/client if the server name differs from host"
+        },
+        "admin_user": {
+            "type": "string",
+            "description": "Local Synapse server admin account"
+        },
+        "admin_password": {
+            "type": "string",
+            "description": "Initial password of the admin account; empty until the account exists"
+        },
+        "homeserver_url": {
+            "type": "string"
+        },
+        "element_url": {
+            "type": "string"
+        },
+        "cinny_url": {
+            "type": "string"
+        },
+        "ketesa_url": {
+            "type": "string"
+        }
+    }
+}

@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Validate and store the settings, bind the user domain and write the
+# configuration of Synapse, the web apps and the enabled bridges.
+
+import json
+import os
+import sys
+
+import agent
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_runtime
+import matrix_setup
+
+data = json.load(sys.stdin)
+
+
+def fail(error):
+    agent.set_status("validation-failed")
+    json.dump([{
+        "field": error.field,
+        "parameter": error.field,
+        "value": error.value,
+        "error": error.error,
+    }], fp=sys.stdout)
+    sys.exit(2)
+
+
+with matrix_setup.settings_lock():
+    previous = matrix_setup.ensure_settings()
+    try:
+        # Validate without storing first: host checks below need the old values
+        candidate = matrix_setup.apply_request(data, state_dir=".", write=False)
+    except matrix_setup.SettingsError as error:
+        fail(error)
+
+    for field in ("host",) + tuple(f"{app}_host" for app in matrix_setup.WEB_APPS):
+        value = candidate[field]
+        if value and value != previous.get(field) and value not in matrix_setup.own_hosts(previous) \
+                and agent.http_route_in_use(domain=value):
+            fail(matrix_setup.SettingsError(field, value, "domain_already_used_in_traefik"))
+
+    domain = candidate["user_domain"]
+    if domain:
+        from agent.ldapproxy import Ldapproxy
+        if domain not in Ldapproxy().get_domains_list():
+            fail(matrix_setup.SettingsError("user_domain", domain, "user_domain_not_found"))
+
+    settings = matrix_setup.apply_request(data)
+    agent.bind_user_domains([domain] if domain else [])
+    matrix_runtime.render_all(
+        settings,
+        matrix_setup.ports(),
+        ldap=matrix_runtime.ldap_settings(domain),
+        smarthost=matrix_runtime.smarthost_settings(),
+    )

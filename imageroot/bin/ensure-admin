@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Create the local server admin account once Synapse answers.
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "pypkg"))
+import matrix_runtime
+import matrix_setup
+
+settings = matrix_setup.read_settings()
+if not settings.get("host") or os.path.exists(matrix_runtime.ADMIN_FLAG):
+    sys.exit(0)
+port_map = matrix_setup.ports()
+matrix_runtime.wait_for_synapse(port_map["synapse"])
+if matrix_runtime.ensure_admin(settings, port_map):
+    print("Created the Matrix admin account", matrix_setup.user_id(matrix_setup.ADMIN_LOCALPART, settings["server_name"]), file=sys.stderr)

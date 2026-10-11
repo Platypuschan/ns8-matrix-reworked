@@ -1,0 +1,21 @@
+{
+  "name": "matrix-reworked",
+  "description": {
+    "en": "Matrix homeserver (Synapse) with Element Web, Cinny, the Ketesa admin UI and mautrix bridges for WhatsApp, Signal, Telegram, Messenger/Instagram, Slack, Discord and more.",
+    "de": "Matrix-Homeserver (Synapse) mit Element Web, Cinny, der Ketesa-Verwaltung und mautrix-Bridges für WhatsApp, Signal, Telegram, Messenger/Instagram, Slack, Discord und mehr."
+  },
+  "categories": [
+    "collaboration"
+  ],
+  "authors": [
+    {
+      "name": "Platypuschan"
+    }
+  ],
+  "docs": {
+    "documentation_url": "https://github.com/Platypuschan/ns8-matrix-reworked#readme",
+    "bug_url": "https://github.com/Platypuschan/ns8-matrix-reworked/issues",
+    "code_url": "https://github.com/Platypuschan/ns8-matrix-reworked"
+  },
+  "source": "ghcr.io/platypuschan/matrix-reworked"
+}

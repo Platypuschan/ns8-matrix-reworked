@@ -1,0 +1,48 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# mautrix bridge %i. state/bridges/%i holds its configuration, which the
+# bridge completes and updates itself; unit.env names the image. The image
+# entrypoint (docker-run.sh) is not used: it would switch to UID 1337, whose
+# files the module agent cannot read. The bridge runs as root of the rootless
+# container, i.e. as the module user, in the host network namespace to reach
+# Synapse and PostgreSQL on 127.0.0.1.
+#
+
+[Unit]
+Description=mautrix-%i Matrix bridge
+Requires=postgresql.service
+Wants=synapse.service
+After=postgresql.service synapse.service
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+EnvironmentFile=%E/state/bridges/%i/unit.env
+WorkingDirectory=%E/state
+Restart=always
+RestartSec=10s
+TimeoutStartSec=900
+TimeoutStopSec=40
+ExecStartPre=/bin/rm -f %t/bridge-%i.pid %t/bridge-%i.ctr-id
+ExecStartPre=/bin/sh -c 'podman image exists "${BRIDGE_IMAGE}" || podman pull "${BRIDGE_IMAGE}"'
+ExecStartPre=runagent ensure-bridge-database ${BRIDGE_DATABASE}
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/bridge-%i.pid \
+    --cidfile %t/bridge-%i.ctr-id --cgroups=no-conmon \
+    --replace -d --name bridge-%i \
+    --network=host \
+    --volume %E/state/bridges/%i:/data:Z \
+    --workdir /data \
+    --entrypoint ${BRIDGE_BINARY} \
+    ${BRIDGE_IMAGE} \
+    -c /data/config.yaml -r /data/registration.yaml
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/bridge-%i.ctr-id -t 30
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/bridge-%i.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/bridge-%i.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

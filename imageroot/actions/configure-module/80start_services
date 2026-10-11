@@ -1,0 +1,64 @@
+#!/bin/bash
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+set -e
+exec 1>&2
+
+# shellcheck disable=SC1091
+source ports.env
+mapfile -t bridges < <(python3 -c 'import json; print("\n".join(json.load(open("matrix.json"))["bridges"]))')
+mapfile -t web_apps < <(python3 -c '
+import json
+s = json.load(open("matrix.json"))
+for app in ("element", "cinny", "ketesa"):
+    print(app + ("=on" if s[app + "_host"] else "=off"))
+delegated = s["server_name"] != s["host"] and s["wellknown_on_server_name"]
+print("wellknown=" + ("on" if delegated else "off"))
+')
+
+# Start a unit, or restart it if a configuration it reads at start changed
+start_or_restart() {
+    local unit="$1" flag="$2"
+    systemctl --user enable "${unit}"
+    # A failed earlier start can have hit the start rate limit
+    systemctl --user reset-failed "${unit}" || true
+    if ! systemctl --user is-active --quiet "${unit}"; then
+        systemctl --user start "${unit}"
+    elif [[ -e "${flag}" ]]; then
+        systemctl --user restart "${unit}"
+    fi
+    rm -f "${flag}"
+}
+
+systemctl --user daemon-reload
+start_or_restart postgresql.service restart-needed-postgresql
+start_or_restart synapse.service restart-needed-synapse
+
+for item in "${web_apps[@]}"; do
+    app="${item%=*}"
+    if [[ "${item#*=}" == on ]]; then
+        start_or_restart "${app}.service" "restart-needed-${app}"
+    else
+        systemctl --user disable --now "${app}.service"
+        rm -f "restart-needed-${app}"
+    fi
+done
+
+# Stop the bridges that are no longer enabled
+while read -r unit _; do
+    key="${unit#bridge@}"
+    key="${key%.service}"
+    if [[ " ${bridges[*]} " != *" ${key} "* ]]; then
+        systemctl --user disable --now "${unit}"
+        rm -f "restart-needed-bridge-${key}"
+    fi
+done < <(systemctl --user list-units --all --plain --no-legend 'bridge@*.service')
+for key in "${bridges[@]}"; do
+    start_or_restart "bridge@${key}.service" "restart-needed-bridge-${key}"
+done
+
+# The admin account needs a running Synapse
+ensure-admin

@@ -1,0 +1,134 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check catalog version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            .github/scripts/check-catalog-version --base "origin/$BASE_REF"
+          elif [[ "$REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            .github/scripts/check-catalog-version --base "origin/$DEFAULT_BRANCH"
+          else
+            .github/scripts/check-catalog-version
+          fi
+
+      - name: Validate Python and JSON
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import ast
+          import json
+          from pathlib import Path
+
+          errors = []
+          ignored = {".git", ".devcontainer", "node_modules", "dist"}
+
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or ignored.intersection(path.parts):
+                  continue
+              try:
+                  source = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+              first_line = source.partition("\n")[0]
+              if first_line.startswith("#!") and "python" in first_line:
+                  try:
+                      ast.parse(source, filename=str(path))
+                  except SyntaxError as exc:
+                      errors.append(f"{path}: {exc}")
+
+          for path in Path(".").rglob("*.json"):
+              if ignored.intersection(path.parts):
+                  continue
+              try:
+                  with path.open(encoding="utf-8") as stream:
+                      json.load(stream)
+              except (OSError, json.JSONDecodeError) as exc:
+                  errors.append(f"{path}: {exc}")
+
+          if errors:
+              print("\n".join(errors))
+              raise SystemExit(1)
+          PY
+
+      - name: Validate shell scripts and systemd state paths
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          while IFS= read -r -d '' file; do
+            if head -n 1 "$file" | grep -Eq '^#!.*(bash|/sh)([[:space:]]|$)'; then
+              bash -n "$file"
+            fi
+          done < <(find . -type f \
+            -not -path './.git/*' \
+            -not -path './ui/node_modules/*' \
+            -print0)
+
+          if grep -R --line-number --fixed-string '%S/state' imageroot; then
+            echo "Legacy %S systemd state path found; use %E on current NS8 systems." >&2
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: |
+          # The NS8 agent environment provides PyYAML, too
+          sudo apt-get install -y --no-install-recommends python3-yaml
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  ui:
+    name: UI lint and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          # Keep in sync with NODE_IMAGE in build-images.sh
+          node-version: "24.20.0"
+          cache: yarn
+          cache-dependency-path: ui/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        working-directory: ui
+
+      - name: Lint
+        run: yarn lint
+        working-directory: ui
+
+      - name: Build
+        run: yarn build
+        working-directory: ui

@@ -1,0 +1,33 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# Cinny Matrix client (static web app), published on 127.0.0.1 for Traefik.
+#
+
+[Unit]
+Description=Cinny Matrix client
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+EnvironmentFile=%E/state/ports.env
+WorkingDirectory=%E/state
+Restart=always
+TimeoutStopSec=30
+ExecStartPre=/bin/rm -f %t/cinny.pid %t/cinny.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/cinny.pid \
+    --cidfile %t/cinny.ctr-id --cgroups=no-conmon \
+    --replace -d --name cinny \
+    --publish 127.0.0.1:${CINNY_PORT}:80 \
+    --volume %E/state/web/cinny.json:/usr/share/nginx/html/config.json:ro,Z \
+    ${CINNY_IMAGE}
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/cinny.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/cinny.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/cinny.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

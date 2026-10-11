@@ -1,0 +1,40 @@
+name: "Test module on QEMU"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  module:
+    uses: NethServer/ns8-github-actions/.github/workflows/module-info.yml@v1
+
+  qemu:
+    # Static: a skipped job shows its name with the matrix expressions
+    # unexpanded. The called job adds "<scenario> <distro>".
+    name: NS8
+    needs: module
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [rocky9, debian13]
+        scenario: [install, update]
+    # statuses: write lets each leg report continuous-integration/qemu/<distro>-<scenario>.
+    permissions:
+      contents: read
+      statuses: write
+    uses: NethServer/ns8-github-actions/.github/workflows/test-on-qemu.yml@v1
+    with:
+      distro: ${{ matrix.distro }}
+      image_url: ${{ needs.module.outputs.image }}
+      repo_ref: ${{ needs.module.outputs.sha }}
+      version_tag: ${{ needs.module.outputs.tag }}
+      artifact_suffix: ${{ matrix.scenario }}
+      status_suffix: ${{ matrix.scenario }}
+      script: test-module-${{ matrix.scenario }}.sh
+      timeout_minutes: 60

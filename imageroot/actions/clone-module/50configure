@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# The settings came back with state/matrix.json; configure-module writes
+# the configuration for the ports of this instance and starts everything.
+
+import os
+import sys
+
+import agent
+import agent.tasks
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_setup
+
+settings = matrix_setup.read_settings()
+request = {key: settings[key] for key in matrix_setup.DEFAULTS if key in settings}
+result = agent.tasks.run(agent_id=os.environ["AGENT_ID"], action="configure-module", data=request)
+agent.assert_exp(result["exit_code"] == 0, "The configure-module subtask failed!")

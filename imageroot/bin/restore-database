@@ -1,0 +1,45 @@
+#!/bin/bash
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Replace the PostgreSQL data with state/postgresql.pg_dump (restore and
+# clone). A throw-away PostgreSQL container initializes a new data volume
+# and loads the dump from its init script directory, then stops.
+
+set -euo pipefail
+exec 1>&2
+
+if [[ ! -s postgresql.pg_dump ]]; then
+    echo "No database dump to restore" >&2
+    exit 0
+fi
+
+systemctl --user stop postgresql.service || true
+podman volume rm --force postgres-data
+
+mkdir -p restore
+cat > restore/50restore.sh <<'EOS'
+# The data directory was just initialized; the role "postgres" exists
+# already, so its CREATE ROLE line fails harmlessly.
+psql -v ON_ERROR_STOP=0 -U postgres -f /tmp/postgresql.pg_dump >/dev/null
+ec=$?
+docker_temp_server_stop
+exit $ec
+EOS
+
+podman run \
+    --rm \
+    --network=none \
+    --volume=./restore:/docker-entrypoint-initdb.d/:Z \
+    --volume=postgres-data:/var/lib/postgresql/data:Z \
+    --volume=./postgresql.pg_dump:/tmp/postgresql.pg_dump:ro,Z \
+    --env-file=<(python3 -c 'import json; print("POSTGRES_PASSWORD=" + json.load(open("matrix.json"))["secrets"]["postgres_password"])') \
+    --env=POSTGRES_USER=postgres \
+    --env=TZ=UTC \
+    --env=POSTGRES_INITDB_ARGS="--encoding=UTF-8 --lc-collate=C --lc-ctype=C" \
+    --replace --name=restore-db \
+    "${POSTGRES_IMAGE}"
+
+rm -rf restore postgresql.pg_dump
