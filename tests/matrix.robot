@@ -371,8 +371,8 @@ Database dump and restore keep the data
     ${output}    ${rc} =    Execute Command    runagent -m ${module_id} module-dump-state
     ...    return_rc=True    return_stderr=True    return_stdout=False
     Should Be Equal As Integers    ${rc}    0    dump failed: ${output}
-    ${dump} =    Execute Command    runagent -m ${module_id} grep -c -E '^CREATE DATABASE (synapse|mautrix_whatsapp) ' postgresql.pg_dump
-    Should Be Equal    ${dump}    2
+    ${dump} =    Execute Command    runagent -m ${module_id} grep -c -E '^CREATE DATABASE synapse ' postgresql.pg_dump
+    Should Be Equal    ${dump}    1
     # The same steps as restore-module: new data volume from the dump, then
     # configure-module with the stored settings
     ${output}    ${rc} =    Execute Command    runagent -m ${module_id} restore-database

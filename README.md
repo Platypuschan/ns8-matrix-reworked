@@ -88,7 +88,7 @@ here and gets the homeserver details back; the Settings page lists the
 registered bridges.
 
 The API for bridge modules (role `appserviceadm`; a bridge module image asks
-for it with `org.nethserver.authorizations=matrix-reworked@node:appserviceadm`):
+for it with `org.nethserver.authorizations=matrix-reworked@any:appserviceadm`, which works whatever is installed first; a bridge module uses the instance on its own node):
 
 | Action | Purpose |
 | --- | --- |
