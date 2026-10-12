@@ -816,7 +816,9 @@ def firewall_ports(settings, port_map, udp_map):
 # --- Appservices of bridge modules -----------------------------------------
 
 APPSERVICE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
-LOCALPART_PATTERN = re.compile(r"^[a-z0-9._=/+-]{1,255}$")
+# mautrix bridges use a random mixed-case sender_localpart (it is never
+# shown); Synapse accepts it for appservices
+LOCALPART_PATTERN = re.compile(r"^[A-Za-z0-9._=/+-]{1,255}$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._~+/=-]{16,512}$")
 LOOPBACK_URL_PATTERN = re.compile(r"^http://127\.0\.0\.1:[0-9]{1,5}(/[^\s]*)?$")
 # Registration keys passed on to Synapse; anything else is dropped

@@ -474,6 +474,9 @@ class AppserviceTest(StateTest):
         # A non-exclusive wide namespace (double puppeting style) is fine
         reg = registration(namespaces={"users": [{"regex": "@.*:matrix\\.example\\.org", "exclusive": False}]})
         self.assertTrue(matrix_setup.validate_registration(reg, settings, "x", existing))
+        # Random mixed-case sender of a mautrix registration
+        reg = registration(sender_localpart="O3BHPJF2TCY6DBjAH4uNdNf1vhjgYkU7")
+        self.assertTrue(matrix_setup.validate_registration(reg, settings, "x", existing))
         # url null: no events pushed (allowed)
         self.assertIsNone(matrix_setup.validate_registration(registration(url=None), settings, "x", existing)["url"])
 
