@@ -60,13 +60,13 @@ PORT_NAMES = [
     "telegram",
     # Ports of bridges removed in 0.3.0 stay reserved: the positions of the
     # services after them must not change
-    "reserved-meta",
-    "reserved-gmessages",
-    "reserved-slack",
+    "reserved_meta",
+    "reserved_gmessages",
+    "reserved_slack",
     "discord",
-    "reserved-bluesky",
-    "reserved-twitter",
-    "reserved-linkedin",
+    "reserved_bluesky",
+    "reserved_twitter",
+    "reserved_linkedin",
     "wellknown",
     # Element Call: LiveKit signalling (through Traefik), LiveKit ICE/TCP
     # (public) and the LiveKit JWT service (through Traefik)
