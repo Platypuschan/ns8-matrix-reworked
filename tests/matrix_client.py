@@ -13,6 +13,8 @@ failed; the reason is on stderr.
 
 import argparse
 import json
+import os
+import socket
 import ssl
 import sys
 import time
@@ -102,6 +104,9 @@ def main():
     p = sub.add_parser("bot-reply")
     p.add_argument("bot")
     sub.add_parser("whoami")
+    p = sub.add_parser("stun")
+    p.add_argument("port", type=int)
+    sub.add_parser("sfu-token")
     p = sub.add_parser("server-admin")
     p.add_argument("user_id")
     args = parser.parse_args()
@@ -145,6 +150,33 @@ def main():
             120, f"a message from {args.bot}",
         )
         result = {"room_id": room, "reply": reply[:200]}
+    elif args.command == "stun":
+        # RFC 5389 binding request to coturn on this node
+        transaction = os.urandom(12)
+        request = b"\x00\x01\x00\x00" + b"\x21\x12\xa4\x42" + transaction
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            udp.settimeout(5)
+            udp.sendto(request, ("127.0.0.1", args.port))
+            answer = udp.recv(2048)
+        if answer[:2] != b"\x01\x01" or answer[8:20] != transaction:
+            raise SystemExit(f"no STUN binding success response: {answer[:20].hex()}")
+        result = {"stun": "ok"}
+    elif args.command == "sfu-token":
+        # What Element Call does: OpenID token from Synapse, then a LiveKit
+        # token from the JWT service (legacy /sfu/get API)
+        whoami = client.call("GET", "/account/whoami")
+        quoted = urllib.parse.quote(whoami["user_id"])
+        openid = client.call("POST", f"/user/{quoted}/openid/request_token", {})
+        room = client.call("POST", "/createRoom", {"preset": "private_chat"})["room_id"]
+        anonymous = Client(args.host)
+        answer, _ = anonymous.request("POST", "/livekit/jwt/sfu/get", {
+            "room": room,
+            "openid_token": openid,
+            "device_id": whoami.get("device_id") or "ROBOT",
+        })
+        if not isinstance(answer, dict) or not answer.get("jwt"):
+            raise SystemExit(f"no LiveKit token: {answer}")
+        result = {"url": answer.get("url"), "jwt_parts": len(answer["jwt"].split("."))}
     elif args.command == "whoami":
         result = client.call("GET", "/account/whoami")
     elif args.command == "server-admin":

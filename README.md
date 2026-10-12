@@ -11,6 +11,8 @@ A [NethServer 8](https://github.com/NethServer/ns8-core) module for a complete
 - **mautrix bridges**, each enabled with one switch: WhatsApp, Signal, Telegram,
   Messenger/Instagram, Google Messages, Slack, Discord, Bluesky, X (Twitter) and
   LinkedIn, with double puppeting and end-to-bridge encryption allowed
+- **calls**: **Element Call** (MatrixRTC with a LiveKit media server, embedded in
+  Element Web) and a **coturn** TURN server for classic 1:1 calls and LiveKit
 - **server name delegation** (user IDs `@alice:example.org` with the homeserver
   on `matrix.example.org`), optionally served by the module
 - notification mails through the cluster smarthost
@@ -54,6 +56,9 @@ Open the module in the cluster admin UI, or use `configure-module`:
 | `telegram_api_id`, `telegram_api_hash` | Required for the Telegram bridge, from <https://my.telegram.org/apps>. An empty hash keeps the stored one. |
 | `mail_from` | Sender of notification mails (default `noreply@<server_name>`). |
 | `max_upload_mb` | Maximum upload size, default 100. |
+| `element_call` | Element Call backend: LiveKit SFU and LiveKit JWT service below `https://<host>/livekit/`. |
+| `turn` | coturn TURN server (UDP). |
+| `calls_public_ip` | Public IP address of the node if it is behind NAT; empty: LiveKit finds it with STUN, coturn announces the node addresses. |
 
 Fields missing from a request keep their stored value.
 
@@ -86,6 +91,32 @@ are kept (restart the bridge with `runagent -m <module> systemctl --user restart
 Disabling a bridge stops it and removes it from Synapse; its configuration and
 database are kept for a later re-enable.
 
+### Calls
+
+**Element Call** needs no extra host name: LiveKit (`/livekit/sfu`) and the
+JWT service (`/livekit/jwt`) are routed below the homeserver host. Synapse
+announces them through its RTC transports API and the client well-known
+(`org.matrix.msc4143.rtc_foci`) and enables the experimental features Element
+Call needs (delayed events, `state_after`, sticky events). Element Web uses
+its embedded Element Call; Element X finds the backend on its own.
+
+The JWT service checks the OpenID tokens of callers with the federation API of
+the server name, so `https://<server_name>/.well-known/matrix/server` must
+point to the homeserver (with a delegated server name: the module's
+well-known option, or your own documents). The module's own host names are
+resolved to this node, so no hairpin NAT is needed. Only users of this server
+can start calls.
+
+The **TURN server** listens on UDP only. Synapse hands out short-lived
+credentials (shared secret); LiveKit uses the same TURN server. Relaying to
+private, loopback and link-local addresses is denied.
+
+Calls use a UDP port range allocated by NS8 (64 ports: TURN, LiveKit media,
+62 TURN relay ports) and one TCP port for LiveKit (ICE over TCP). The module
+opens them in the node firewall; the Settings page lists them. Behind a
+router, forward them to the node. Instances installed before 0.2.0 get their
+UDP ports when calls are enabled for the first time.
+
 ## Services
 
 All containers run rootless as the module user:
@@ -97,6 +128,8 @@ All containers run rootless as the module user:
 | `element.service`, `cinny.service`, `ketesa.service` | web apps |
 | `wellknown.service` | `/.well-known/matrix` for a delegated server name |
 | `bridge@<bridge>.service` | one mautrix bridge |
+| `coturn.service` | coturn TURN server |
+| `livekit.service`, `lk-jwt.service` | LiveKit SFU and LiveKit JWT service for Element Call |
 
 ## Backup and restore
 

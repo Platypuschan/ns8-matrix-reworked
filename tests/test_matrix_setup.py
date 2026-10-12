@@ -17,6 +17,7 @@ import matrix_runtime  # noqa: E402
 import matrix_setup  # noqa: E402
 
 ENV = {"TCP_PORTS_RANGE": "20001-20020"}
+UDP_ENV = {"UDP_PORTS_RANGE": "40001-40064"}
 BASE = {"host": "matrix.example.org", "lets_encrypt": False, "http2https": True}
 
 
@@ -246,6 +247,126 @@ class BridgeConfigTest(StateTest):
         self.assertEqual(registration["namespaces"]["users"], [{"regex": "@.*:example\\.org", "exclusive": False}])
 
 
+class CallsTest(StateTest):
+    def maps(self):
+        return matrix_setup.ports(ENV), matrix_setup.udp_ports(UDP_ENV)
+
+    def test_udp_ports(self):
+        udp = matrix_setup.udp_ports(UDP_ENV)
+        self.assertEqual(udp, {"turn": 40001, "livekit": 40002, "relay_first": 40003, "relay_last": 40064})
+        self.assertIsNone(matrix_setup.udp_ports({}))
+        with self.assertRaises(RuntimeError):
+            matrix_setup.udp_ports({"UDP_PORTS_RANGE": "40001-40010"})
+
+    def test_build_demands_udp_ports_and_roles(self):
+        build = (Path(__file__).resolve().parents[1] / "build-images.sh").read_text()
+        demand = int(build.split("org.nethserver.udp-ports-demand=")[1].split('"')[0])
+        self.assertEqual(demand, matrix_setup.UDP_PORTS_DEMAND)
+        self.assertIn("node:fwadm,portsadm", build)
+        self.assertEqual(matrix_setup.PORT_NAMES[16:], ["livekit", "livekit_tcp", "lk_jwt"])
+
+    def test_disabled_by_default(self):
+        settings = self.apply()
+        self.assertFalse(matrix_setup.calls_enabled(settings))
+        port_map, udp_map = self.maps()
+        config = matrix_setup.homeserver_config(settings, port_map, udp_map=udp_map)
+        for key in ("turn_uris", "matrix_rtc", "experimental_features", "max_event_delay_duration"):
+            self.assertNotIn(key, config)
+        self.assertEqual(matrix_setup.firewall_ports(settings, *self.maps()), [])
+        self.assertNotIn("element_call", matrix_setup.element_config(settings))
+
+    def test_turn(self):
+        settings = self.apply(turn=True)
+        port_map, udp_map = self.maps()
+        config = matrix_setup.homeserver_config(settings, port_map, udp_map=udp_map)
+        self.assertEqual(config["turn_uris"], ["turn:matrix.example.org:40001?transport=udp"])
+        self.assertEqual(config["turn_shared_secret"], settings["secrets"]["turn_shared_secret"])
+        self.assertFalse(config["turn_allow_guests"])
+        conf = matrix_setup.coturn_config(settings, matrix_setup.udp_ports(UDP_ENV))
+        self.assertIn("listening-port=40001\n", conf)
+        self.assertIn("min-port=40003\nmax-port=40064\n", conf)
+        self.assertIn("static-auth-secret=" + settings["secrets"]["turn_shared_secret"], conf)
+        self.assertIn("denied-peer-ip=192.168.0.0-192.168.255.255", conf)
+        self.assertIn("no-tcp\n", conf)
+        self.assertNotIn("external-ip", conf)
+        self.assertEqual(matrix_setup.firewall_ports(settings, *self.maps()), ["40001/udp", "40003-40064/udp"])
+        # TURN needs UDP ports
+        self.assertNotIn("turn_uris", matrix_setup.homeserver_config(settings, matrix_setup.ports(ENV)))
+
+    def test_element_call(self):
+        settings = self.apply(element_call=True, turn=True, calls_public_ip="93.184.216.34")
+        port_map, udp_map = self.maps()
+        config = matrix_setup.homeserver_config(settings, port_map, udp_map=udp_map)
+        foci = [{"type": "livekit", "livekit_service_url": "https://matrix.example.org/livekit/jwt"}]
+        self.assertEqual(config["matrix_rtc"], {"transports": foci})
+        self.assertEqual(config["extra_well_known_client_content"], {"org.matrix.msc4143.rtc_foci": foci})
+        self.assertTrue(config["experimental_features"]["msc4143_enabled"])
+        self.assertTrue(config["experimental_features"]["msc4222_enabled"])
+        self.assertEqual(config["max_event_delay_duration"], "24h")
+        livekit = matrix_setup.livekit_config(settings, port_map, udp_map)
+        self.assertEqual(livekit["port"], 20017)
+        self.assertEqual(livekit["bind_addresses"], ["127.0.0.1"])
+        self.assertEqual(livekit["rtc"]["tcp_port"], 20018)
+        self.assertEqual(livekit["rtc"]["udp_port"], 40002)
+        self.assertEqual(livekit["rtc"]["node_ip"], "93.184.216.34")
+        self.assertFalse(livekit["rtc"]["use_external_ip"])
+        self.assertEqual(livekit["rtc"]["turn_servers"][0]["secret"], settings["secrets"]["turn_shared_secret"])
+        self.assertEqual(livekit["keys"], {settings["secrets"]["livekit_key"]: settings["secrets"]["livekit_secret"]})
+        self.assertEqual(livekit["webhook"]["urls"], ["http://127.0.0.1:20019/sfu_webhook"])
+        env = matrix_setup.lk_jwt_env(settings, port_map)
+        self.assertEqual(env["LIVEKIT_URL"], "wss://matrix.example.org/livekit/sfu")
+        self.assertEqual(env["LIVEKIT_JWT_BIND"], "127.0.0.1:20019")
+        self.assertEqual(env["LIVEKIT_FULL_ACCESS_HOMESERVERS"], "matrix.example.org")
+        self.assertIn("LIVEKIT_INSECURE_SKIP_VERIFY_TLS", env)
+        self.assertNotIn("LIVEKIT_INSECURE_SKIP_VERIFY_TLS", matrix_setup.lk_jwt_env(self.apply(lets_encrypt=True), port_map))
+        self.assertEqual(matrix_setup.lk_jwt_unit_env(settings), {"LK_JWT_HOST_ARGS": "--add-host=matrix.example.org:127.0.0.1"})
+        self.assertEqual(matrix_setup.firewall_ports(settings, port_map, udp_map),
+                         ["40001/udp", "40003-40064/udp", "40002/udp", "20018/tcp"])
+        element = matrix_setup.element_config(settings)
+        self.assertTrue(element["features"]["feature_group_calls"])
+        self.assertTrue(element["element_call"]["use_exclusively"])
+        self.assertNotIn("url", element["element_call"])
+
+    def test_element_call_without_federation(self):
+        port_map, udp_map = self.maps()
+        config = matrix_setup.homeserver_config(self.apply(element_call=True, federation=False), port_map, udp_map=udp_map)
+        # The JWT service checks OpenID tokens with the federation API
+        self.assertEqual(config["listeners"][0]["resources"][0]["names"], ["client", "openid"])
+        self.assertTrue(config["serve_server_wellknown"])
+        self.assertEqual(config["federation_domain_whitelist"], [])
+
+    def test_element_call_delegated(self):
+        settings = self.apply(server_name="example.org", element_call=True, wellknown_on_server_name=True)
+        client = matrix_setup.wellknown_documents(settings)["client"]
+        self.assertEqual(client["org.matrix.msc4143.rtc_foci"][0]["livekit_service_url"], "https://matrix.example.org/livekit/jwt")
+        self.assertEqual(matrix_setup.lk_jwt_local_hosts(settings), ["matrix.example.org", "example.org"])
+        settings = self.apply(wellknown_on_server_name=False)
+        # Someone else serves example.org: resolve it normally
+        self.assertEqual(matrix_setup.lk_jwt_local_hosts(settings), ["matrix.example.org"])
+
+    def test_public_ip_validation(self):
+        for value in ("10.1.2.3", "127.0.0.1", "not-an-ip", "fd00::1"):
+            with self.subTest(value=value):
+                with self.assertRaises(matrix_setup.SettingsError) as raised:
+                    self.apply(calls_public_ip=value)
+                self.assertEqual(raised.exception.error, "invalid_ip_address")
+        self.assertEqual(self.apply(calls_public_ip=" 2001:db8::1 ".replace("2001:db8::1", "2a00:1450::1"))["calls_public_ip"], "2a00:1450::1")
+
+    def test_render_calls(self):
+        settings = self.apply(turn=True, element_call=True)
+        port_map, udp_map = self.maps()
+        matrix_runtime.render_calls(settings, port_map, udp_map, self.state)
+        self.assertEqual(self.mode("calls"), 0o700)
+        for name in ("turnserver.conf", "livekit.yaml", "lk-jwt.env"):
+            self.assertEqual(self.mode("calls", name), 0o600)
+        flags = {n for n in os.listdir(self.state) if n.startswith("restart-needed-")}
+        self.assertEqual(flags, {"restart-needed-coturn", "restart-needed-livekit", "restart-needed-lk-jwt"})
+        # Nothing without UDP ports (instance before 0.2.0, calls disabled)
+        other = tempfile.mkdtemp(dir=self.state)
+        matrix_runtime.render_calls(settings, port_map, None, other)
+        self.assertEqual(os.listdir(other), [])
+
+
 class OutputTest(StateTest):
     def test_configuration_hides_secrets(self):
         settings = self.apply(bridges=["telegram"], telegram_api_id="1", telegram_api_hash="secret-hash")
@@ -259,6 +380,9 @@ class OutputTest(StateTest):
         self.assertEqual(output["homeserver_url"], "https://matrix.example.org/")
         self.assertEqual(len(output["available_bridges"]), len(matrix_setup.BRIDGES))
         self.assertEqual(output["wellknown_server"], "")
+        self.assertEqual(output["calls_ports"], [])
+        self.assertNotIn(settings["secrets"]["turn_shared_secret"], text)
+        self.assertNotIn(settings["secrets"]["livekit_secret"], text)
         self.assertEqual(matrix_setup.configuration(settings, [], admin_ready=False)["admin_password"], "")
 
     def test_output_schema_covers_all_keys(self):

@@ -24,6 +24,7 @@ with matrix_setup.settings_lock():
         matrix_setup.ports(),
         ldap=matrix_runtime.ldap_settings(settings.get("user_domain")),
         smarthost=matrix_runtime.smarthost_settings(),
+        udp_map=matrix_setup.udp_ports(),
     )
     # This start uses the new files
     try:

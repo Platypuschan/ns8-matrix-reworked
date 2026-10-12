@@ -55,7 +55,7 @@ Run action
 
 Configure current module
     [Arguments]    &{extra}
-    ${payload} =    Evaluate    json.dumps({"host": $HOST, "server_name": $SERVER_NAME, "http2https": False, "lets_encrypt": False, "user_domain": $USER_DOMAIN, "federation": True, "wellknown_on_server_name": True, "element_host": $ELEMENT_HOST, "cinny_host": $CINNY_HOST, "ketesa_host": $KETESA_HOST, "bridges": ["whatsapp", "discord"], **$extra})    modules=json
+    ${payload} =    Evaluate    json.dumps({"host": $HOST, "server_name": $SERVER_NAME, "http2https": False, "lets_encrypt": False, "user_domain": $USER_DOMAIN, "federation": True, "wellknown_on_server_name": True, "element_host": $ELEMENT_HOST, "cinny_host": $CINNY_HOST, "ketesa_host": $KETESA_HOST, "bridges": ["whatsapp", "discord"], "turn": True, "element_call": True, **$extra})    modules=json
     ${output}    ${rc} =    Run action    configure-module    ${payload}
     Should Be Equal As Integers    ${rc}    0    configure-module failed: ${output}
 
@@ -162,6 +162,13 @@ Check data kept by the update
     Skip If    r'${SCENARIO}' != 'update'    only the update scenario has data from the previous release
     user2 reads the message
 
+Configure the updated module
+    Skip If    r'${SCENARIO}' != 'update'    only the update scenario updates the module
+    # Releases before 0.2.0 had no UDP ports; enabling calls allocates them
+    Configure current module
+    ${range} =    Execute Command    runagent -m ${module_id} printenv UDP_PORTS_RANGE
+    Should Match Regexp    ${range}    ^[0-9]+-[0-9]+$
+
 Synapse answers through Traefik
     ${versions} =    Matrix    versions
     Should Not Be Empty    ${versions}[versions]
@@ -198,6 +205,35 @@ Bridge bots answer
     Bot answers    whatsappbot
     Bot answers    discordbot
 
+TURN server answers and is announced
+    Unit is    coturn.service    active
+    Read admin credentials
+    ${turn} =    Matrix    get    /_matrix/client/v3/voip/turnServer    token=${admin_token}
+    ${uri} =    Set Variable    ${turn}[body][uris][0]
+    Should Match Regexp    ${uri}    ^turn:${HOST}:[0-9]+\\?transport=udp$
+    Should Not Be Empty    ${turn}[body][password]
+    ${port} =    Evaluate    $uri.split(":")[2].split("?")[0]
+    Matrix    stun    ${port}
+    ${firewall} =    Execute Command    firewall-cmd --info-service=${module_id}
+    Should Contain    ${firewall}    ${port}/udp
+
+Element Call backend is reachable
+    Unit is    livekit.service    active
+    Unit is    lk-jwt.service    active
+    Read admin credentials
+    ${transports} =    Matrix    get    /_matrix/client/unstable/org.matrix.msc4143/rtc/transports    token=${admin_token}
+    Should Be Equal    ${transports}[body][rtc_transports][0][livekit_service_url]    https://${HOST}/livekit/jwt
+    ${client} =    Matrix on    ${SERVER_NAME}    get    /.well-known/matrix/client
+    Should Be Equal    ${client}[body][org.matrix.msc4143.rtc_foci][0][livekit_service_url]    https://${HOST}/livekit/jwt
+    ${health} =    Matrix    get    /livekit/jwt/healthz
+    ${sfu} =    Matrix    get    /livekit/sfu/
+    Should Be Equal    ${sfu}[body]    OK
+    ${token} =    Matrix    sfu-token    token=${admin_token}
+    Should Be Equal    ${token}[url]    wss://${HOST}/livekit/sfu
+    Should Be Equal As Integers    ${token}[jwt_parts]    3
+    ${element} =    Matrix on    ${ELEMENT_HOST}    get    /config.json
+    Should Be True    ${element}[body][element_call][use_exclusively]
+
 Web apps are served
     ${element} =    Matrix on    ${ELEMENT_HOST}    get    /config.json
     Should Be Equal    ${element}[body][default_server_config][m.homeserver][base_url]    https://${HOST}
@@ -228,6 +264,20 @@ A bridge can be disabled
     Should Be Equal    ${config.bridges}    ${{["whatsapp"]}}
     Bot answers    whatsappbot
 
+Calls can be disabled
+    Configure current module    bridges=${{["whatsapp"]}}    turn=${False}    element_call=${False}
+    Unit is    coturn.service    inactive
+    Unit is    livekit.service    inactive
+    Unit is    lk-jwt.service    inactive
+    ${rc} =    Execute Command    firewall-cmd --info-service=${module_id}
+    ...    return_rc=True    return_stdout=False
+    Should Not Be Equal As Integers    ${rc}    0    the firewall service of the call ports remains
+    ${turn} =    Matrix    get    /_matrix/client/v3/voip/turnServer    token=${admin_token}
+    Should Not Contain    ${turn}[body]    uris
+    Configure current module    bridges=${{["whatsapp"]}}
+    Unit is    coturn.service    active
+    Unit is    livekit.service    active
+
 Invalid settings are rejected
     ${output}    ${rc} =    Run action    configure-module    {"host": "${HOST}", "server_name": "other.test", "http2https": false, "lets_encrypt": false}
     Should Not Be Equal As Integers    ${rc}    0
@@ -238,12 +288,15 @@ Invalid settings are rejected
     ${output}    ${rc} =    Run action    configure-module    {"host": "${HOST}", "http2https": false, "lets_encrypt": false, "element_host": "${HOST}"}
     Should Not Be Equal As Integers    ${rc}    0
     Should Contain    ${output}    hostname_already_used
+    ${output}    ${rc} =    Run action    configure-module    {"host": "${HOST}", "http2https": false, "lets_encrypt": false, "calls_public_ip": "192.168.1.10"}
+    Should Not Be Equal As Integers    ${rc}    0
+    Should Contain    ${output}    invalid_ip_address
     &{config} =    Get configuration
     Should Be Equal    ${config.element_host}    ${ELEMENT_HOST}
 
 Secrets stay in private files
-    ${modes} =    Execute Command    runagent -m ${module_id} stat -c '%a' matrix.json postgres.env synapse synapse/homeserver.yaml bridges/whatsapp/config.yaml
-    Should Be Equal    ${modes}    600\n600\n700\n600\n600
+    ${modes} =    Execute Command    runagent -m ${module_id} stat -c '%a' matrix.json postgres.env synapse synapse/homeserver.yaml bridges/whatsapp/config.yaml calls calls/turnserver.conf calls/livekit.yaml calls/lk-jwt.env
+    Should Be Equal    ${modes}    600\n600\n700\n600\n600\n700\n600\n600\n600
     ${environment} =    Execute Command    runagent -m ${module_id} cat environment
     Should Not Contain    ${environment}    ${matrix_admin_password}
     Should Not Contain    ${environment}    PASSWORD

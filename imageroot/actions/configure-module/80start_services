@@ -17,6 +17,9 @@ for app in ("element", "cinny", "ketesa"):
     print(app + ("=on" if s[app + "_host"] else "=off"))
 delegated = s["server_name"] != s["host"] and s["wellknown_on_server_name"]
 print("wellknown=" + ("on" if delegated else "off"))
+print("coturn=" + ("on" if s.get("turn") else "off"))
+for unit in ("livekit", "lk-jwt"):
+    print(unit + ("=on" if s.get("element_call") else "=off"))
 ')
 
 # Start a unit, or restart it if a configuration it reads at start changed

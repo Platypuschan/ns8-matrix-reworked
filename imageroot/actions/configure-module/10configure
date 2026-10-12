@@ -53,9 +53,22 @@ with matrix_setup.settings_lock():
 
     settings = matrix_setup.apply_request(data)
     agent.bind_user_domains([domain] if domain else [])
+
+    udp_map = matrix_setup.udp_ports()
+    if udp_map is None and matrix_setup.calls_enabled(settings):
+        # Instances installed before 0.2.0 have no UDP ports yet; the update
+        # raised the module's UDP port demand, so allocate them now.
+        first, last = agent.allocate_ports(matrix_setup.UDP_PORTS_DEMAND, "udp")
+        agent.set_env("UDP_PORTS_RANGE", f"{first}-{last}")
+        agent.set_env("UDP_PORT", str(first))
+        agent.dump_env()
+        os.environ["UDP_PORTS_RANGE"] = f"{first}-{last}"
+        udp_map = matrix_setup.udp_ports()
+
     matrix_runtime.render_all(
         settings,
         matrix_setup.ports(),
         ldap=matrix_runtime.ldap_settings(domain),
         smarthost=matrix_runtime.smarthost_settings(),
+        udp_map=udp_map,
     )

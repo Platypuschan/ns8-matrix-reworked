@@ -40,7 +40,16 @@
             "homeserver_url": "https://matrix.example.org/",
             "element_url": "https://chat.example.org/",
             "cinny_url": "",
-            "ketesa_url": ""
+            "ketesa_url": "",
+            "turn": true,
+            "element_call": true,
+            "calls_public_ip": "",
+            "calls_ports": [
+                "40000/udp",
+                "40002-40063/udp",
+                "40001/udp",
+                "20019/tcp"
+            ]
         }
     ],
     "type": "object",
@@ -70,7 +79,11 @@
         "homeserver_url",
         "element_url",
         "cinny_url",
-        "ketesa_url"
+        "ketesa_url",
+        "turn",
+        "element_call",
+        "calls_public_ip",
+        "calls_ports"
     ],
     "properties": {
         "server_name": {
@@ -182,6 +195,22 @@
         },
         "ketesa_url": {
             "type": "string"
+        },
+        "turn": {
+            "type": "boolean"
+        },
+        "element_call": {
+            "type": "boolean"
+        },
+        "calls_public_ip": {
+            "type": "string"
+        },
+        "calls_ports": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Ports to open/forward for calls, like 40001/udp or 40002-40063/udp"
         }
     }
 }

@@ -82,13 +82,13 @@ def write_ports(port_map, state_dir="."):
     return write_public(os.path.join(state_dir, PORTS_ENV), "\n".join(lines) + "\n")
 
 
-def render_synapse(settings, port_map, ldap=None, smarthost=None, state_dir="."):
+def render_synapse(settings, port_map, ldap=None, smarthost=None, state_dir=".", udp_map=None):
     """Write the Synapse configuration; flag a restart if it changed."""
     setup.private_dir(os.path.join(state_dir, setup.SYNAPSE_DIR))
     setup.private_dir(os.path.join(state_dir, setup.APPSERVICE_DIR))
     changed = setup.write_json(
         os.path.join(state_dir, setup.SYNAPSE_DIR, "homeserver.yaml"),
-        setup.homeserver_config(settings, port_map, ldap, smarthost),
+        setup.homeserver_config(settings, port_map, ldap, smarthost, udp_map),
     )
     changed |= setup.write_json(os.path.join(state_dir, setup.SYNAPSE_DIR, "log.config"), setup.log_config())
     changed |= setup.write_json(
@@ -121,6 +121,29 @@ def render_web(settings, state_dir="."):
         os.chmod(path, 0o755)
     for name, document in setup.wellknown_documents(settings).items():
         write_public(os.path.join(wellknown, name), json.dumps(document) + "\n")
+
+
+CALLS_DIR = "calls"
+
+
+def render_calls(settings, port_map, udp_map, state_dir="."):
+    """Write the coturn, LiveKit and JWT service configuration. Without
+    UDP ports nothing is written; the services stay disabled."""
+    if not udp_map:
+        return
+    directory = os.path.join(state_dir, CALLS_DIR)
+    setup.private_dir(directory)
+    files = {
+        "coturn": ("turnserver.conf", setup.coturn_config(settings, udp_map)),
+        "livekit": ("livekit.yaml", json.dumps(setup.livekit_config(settings, port_map, udp_map), indent=2) + "\n"),
+        "lk-jwt": ("lk-jwt.env", "".join(f"{k}={v}\n" for k, v in setup.lk_jwt_env(settings, port_map).items())),
+    }
+    unit_env = "".join(f"{k}={v}\n" for k, v in setup.lk_jwt_unit_env(settings).items())
+    if write_public(os.path.join(directory, "lk-jwt-unit.env"), unit_env):
+        setup.flag_restart("lk-jwt", state_dir)
+    for service, (name, content) in files.items():
+        if setup.write_private(os.path.join(directory, name), content):
+            setup.flag_restart(service, state_dir)
 
 
 def podman(*args, runner=subprocess.run):
@@ -193,14 +216,15 @@ def write_postgres_env(settings, state_dir="."):
     return setup.write_private(os.path.join(state_dir, POSTGRES_ENV), content)
 
 
-def render_all(settings, port_map, ldap=None, smarthost=None, state_dir=".", runner=subprocess.run):
+def render_all(settings, port_map, ldap=None, smarthost=None, state_dir=".", runner=subprocess.run, udp_map=None):
     if write_ports(port_map, state_dir):
         # Every service reads its port at start
-        for service in ["postgresql", "synapse", "wellknown", *setup.WEB_APPS]:
+        for service in ["postgresql", "synapse", "wellknown", "livekit", "lk-jwt", *setup.WEB_APPS]:
             setup.flag_restart(service, state_dir)
     write_postgres_env(settings, state_dir)
-    render_synapse(settings, port_map, ldap, smarthost, state_dir)
+    render_synapse(settings, port_map, ldap, smarthost, state_dir, udp_map)
     render_web(settings, state_dir)
+    render_calls(settings, port_map, udp_map, state_dir)
     for key in settings["bridges"]:
         prepare_bridge(key, settings, port_map, state_dir, runner=runner)
     remove_disabled_registrations(settings, state_dir)

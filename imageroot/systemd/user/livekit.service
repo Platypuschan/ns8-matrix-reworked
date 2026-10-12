@@ -1,0 +1,36 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# LiveKit SFU, the media server of Element Call. Signalling listens on
+# 127.0.0.1 behind Traefik (/livekit/sfu on the homeserver host); media uses
+# one public UDP port and one public TCP port (state/calls/livekit.yaml).
+#
+
+[Unit]
+Description=LiveKit SFU for Element Call
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+WorkingDirectory=%E/state
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30
+ExecStartPre=/bin/rm -f %t/livekit.pid %t/livekit.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/livekit.pid \
+    --cidfile %t/livekit.ctr-id --cgroups=no-conmon \
+    --replace -d --name livekit \
+    --network=host \
+    --volume %E/state/calls/livekit.yaml:/etc/livekit.yaml:ro,Z \
+    ${LIVEKIT_SERVER_IMAGE} \
+    --config /etc/livekit.yaml
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/livekit.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/livekit.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/livekit.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

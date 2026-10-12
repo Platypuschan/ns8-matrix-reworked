@@ -51,6 +51,15 @@ for app in matrix_setup.WEB_APPS:
     else:
         delete_route(app)
 
+# Element Call backend below the homeserver host: the more specific path
+# routes win over the host route of Synapse.
+if settings["element_call"]:
+    set_route("livekit", port_map["livekit"], settings["host"], path=matrix_setup.LIVEKIT_PATH, strip_prefix=True)
+    set_route("lkjwt", port_map["lk_jwt"], settings["host"], path=matrix_setup.LK_JWT_PATH, strip_prefix=True)
+else:
+    delete_route("livekit")
+    delete_route("lkjwt")
+
 if matrix_setup.serves_wellknown(settings):
     # wellknown.service has no MIME type for the extension-less files
     set_route(
