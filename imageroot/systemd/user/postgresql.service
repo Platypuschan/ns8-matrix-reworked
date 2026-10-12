@@ -1,0 +1,45 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# PostgreSQL for Synapse and the bridges (one database each). It shares the
+# host network namespace and listens on 127.0.0.1:${POSTGRES_PORT} only;
+# PGPORT also makes psql and pg_dumpall inside the container use that port.
+#
+
+[Unit]
+Description=PostgreSQL for Matrix
+Before=synapse.service
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+EnvironmentFile=%E/state/ports.env
+WorkingDirectory=%E/state
+Restart=always
+TimeoutStopSec=70
+ExecStartPre=/bin/rm -f %t/postgresql.pid %t/postgresql.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/postgresql.pid \
+    --cidfile %t/postgresql.ctr-id --cgroups=no-conmon \
+    --replace -d --name postgresql \
+    --network=host \
+    --volume postgres-data:/var/lib/postgresql/data:Z \
+    --env-file=%E/state/postgres.env \
+    --env=POSTGRES_USER=postgres \
+    --env=POSTGRES_DB=synapse \
+    --env=POSTGRES_INITDB_ARGS="--encoding=UTF-8 --lc-collate=C --lc-ctype=C" \
+    --env=PGPORT=${POSTGRES_PORT} \
+    --env=TZ=UTC \
+    ${POSTGRES_IMAGE} \
+    postgres -c listen_addresses=127.0.0.1
+# Ready when the final server (not the initdb one) accepts TCP connections
+ExecStartPost=/usr/bin/timeout 300 /bin/sh -c 'until podman exec postgresql pg_isready -q -h 127.0.0.1; do sleep 2; done'
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/postgresql.ctr-id -t 60
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/postgresql.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/postgresql.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

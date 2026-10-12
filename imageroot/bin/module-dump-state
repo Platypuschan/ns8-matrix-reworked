@@ -1,0 +1,18 @@
+#!/bin/bash
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Called by NS8 before Restic runs: dump all PostgreSQL databases (Synapse
+# and the bridges) while they keep running.
+
+set -euo pipefail
+
+if ! systemctl --user is-active --quiet postgresql.service; then
+    echo "PostgreSQL is not running; no database dump" >&2
+    exit 0
+fi
+podman exec postgresql pg_dumpall -U postgres > postgresql.pg_dump.tmp
+mv -f postgresql.pg_dump.tmp postgresql.pg_dump
+chmod 600 postgresql.pg_dump

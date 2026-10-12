@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_setup
+from agent.ldapproxy import Ldapproxy
+
+try:
+    domains = sorted(Ldapproxy().get_domains_list())
+except Exception as error:
+    print(f"Cannot list the user domains: {error}", file=sys.stderr)
+    domains = []
+
+settings = matrix_setup.read_settings()
+settings.setdefault("secrets", {})
+for key, value in matrix_setup.DEFAULTS.items():
+    settings.setdefault(key, value)
+json.dump(
+    matrix_setup.configuration(settings, domains, os.path.exists("admin-created")),
+    fp=sys.stdout,
+)

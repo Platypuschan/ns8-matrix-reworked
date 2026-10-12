@@ -1,0 +1,54 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# Synapse Matrix homeserver. The image entrypoint (start.py) is not used:
+# the module renders the complete configuration (pypkg/matrix_setup.py)
+# into state/synapse, mounted read-only. Synapse runs as root of the
+# rootless container, i.e. as the module user, so all its files stay
+# readable by the module agent and the backup. It shares the host network
+# namespace to reach PostgreSQL, the LDAP proxy and the bridges on
+# 127.0.0.1.
+#
+
+[Unit]
+Description=Synapse Matrix homeserver
+Requires=postgresql.service
+After=postgresql.service
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+EnvironmentFile=%E/state/ports.env
+WorkingDirectory=%E/state
+Restart=always
+RestartSec=5s
+TimeoutStartSec=600
+TimeoutStopSec=70
+ExecStartPre=/bin/rm -f %t/synapse.pid %t/synapse.ctr-id
+ExecStartPre=runagent render-synapse-config
+# Create the server signing key on the first start
+ExecStartPre=/usr/bin/podman run --rm --network=none \
+    --volume synapse-data:/data:z \
+    --volume %E/state/synapse:/data/config:ro,Z \
+    --entrypoint python \
+    ${SYNAPSE_IMAGE} \
+    -m synapse.app.homeserver --config-path /data/config/homeserver.yaml --generate-keys
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/synapse.pid \
+    --cidfile %t/synapse.ctr-id --cgroups=no-conmon \
+    --replace -d --name synapse \
+    --network=host \
+    --volume synapse-data:/data:z \
+    --volume %E/state/synapse:/data/config:ro,Z \
+    --entrypoint python \
+    ${SYNAPSE_IMAGE} \
+    -m synapse.app.homeserver --config-path /data/config/homeserver.yaml
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/synapse.ctr-id -t 60
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/synapse.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/synapse.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

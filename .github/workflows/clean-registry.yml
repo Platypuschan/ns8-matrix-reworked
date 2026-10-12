@@ -1,0 +1,81 @@
+name: "Clean up registry"
+
+# Delete ghcr.io image versions that no longer belong to anything:
+# - versions tagged only with the name of a branch that no longer exists,
+# - untagged versions (superseded builds), once they are older than a day.
+# Release tags (SemVer), latest and main are always kept. The repository
+# token is enough because this repository publishes the package, so no
+# personal access token is needed.
+
+on:
+  delete:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/clean-registry.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: clean-registry
+  cancel-in-progress: false
+
+jobs:
+  delete_images:
+    name: "Delete stale ghcr.io images"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete stale branch and untagged images
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: matrix-reworked
+          # Pull requests only list what would be deleted
+          DRY_RUN: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$(gh api "users/$OWNER" -q .type)" == "Organization" ]]; then
+            base="orgs/$OWNER/packages/container/$PACKAGE"
+          else
+            base="users/$OWNER/packages/container/$PACKAGE"
+          fi
+
+          # publish-branch.yml tags branch images with "/" replaced by "-"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" -q '.[].name' \
+            | tr '/' '-' | sort -u > branch-tags
+          if ! grep -qx main branch-tags; then
+            echo "Branch list looks incomplete; not deleting anything." >&2
+            exit 1
+          fi
+
+          cutoff="$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)"
+          deleted=0
+          while IFS=$'\t' read -r id updated tags; do
+            keep=""
+            for tag in ${tags//,/ }; do
+              if [[ "$tag" =~ ^(latest|main|v?[0-9]+\.[0-9]+\.[0-9]+([-+].*)?)$ ]] || grep -qxF -- "$tag" branch-tags; then
+                keep="$tag"
+                break
+              fi
+            done
+            if [[ -n "$keep" ]]; then
+              continue
+            elif [[ -z "$tags" && "$updated" > "$cutoff" ]]; then
+              continue # a recent untagged build may still be in use by a running workflow
+            fi
+
+            echo "Delete version $id (tags: ${tags:-none}, updated $updated)"
+            if [[ "$DRY_RUN" != "true" ]]; then
+              gh api --input /dev/null -X DELETE "$base/versions/$id"
+            fi
+            deleted=$((deleted + 1))
+          done < <(gh api --paginate "$base/versions?per_page=100" \
+            -q '.[] | [.id, .updated_at, (.metadata.container.tags | join(","))] | @tsv')
+
+          echo "Stale versions: $deleted (dry run: $DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"

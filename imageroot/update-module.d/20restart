@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Write the configuration of the new release (new bridge versions too) and
+# restart the running services with it and with the new images.
+
+import os
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "pypkg"))
+import matrix_runtime
+import matrix_setup
+
+subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+settings = matrix_setup.read_settings()
+if not settings.get("host"):
+    sys.exit(0)
+
+with matrix_setup.settings_lock():
+    settings = matrix_setup.ensure_settings()
+    matrix_runtime.render_all(
+        settings,
+        matrix_setup.ports(),
+        ldap=matrix_runtime.ldap_settings(settings.get("user_domain")),
+        smarthost=matrix_runtime.smarthost_settings(),
+    )
+
+units = ["postgresql.service", "synapse.service"]
+units += [f"{app}.service" for app in matrix_setup.WEB_APPS if settings[f"{app}_host"]]
+if matrix_setup.serves_wellknown(settings):
+    units.append("wellknown.service")
+units += [f"bridge@{key}.service" for key in settings["bridges"]]
+for unit in units:
+    subprocess.run(["systemctl", "--user", "try-restart", unit], check=True)
+for name in os.listdir("."):
+    if name.startswith(matrix_setup.RESTART_FLAG.format("")):
+        os.remove(name)
+# A stopped module stays stopped; the next configure-module creates the admin
+if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "synapse.service"]).returncode == 0:
+    subprocess.run(["ensure-admin"], check=True)

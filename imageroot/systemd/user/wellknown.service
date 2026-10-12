@@ -1,0 +1,38 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# Serves /.well-known/matrix/server and /client for a server name that
+# differs from the homeserver host (Synapse would name the server name
+# itself). It uses static-web-server of the Ketesa image, already pulled
+# with the module.
+#
+
+[Unit]
+Description=Matrix well-known delegation
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+EnvironmentFile=%E/state/ports.env
+WorkingDirectory=%E/state
+Restart=always
+TimeoutStopSec=30
+ExecStartPre=/bin/rm -f %t/wellknown.pid %t/wellknown.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/wellknown.pid \
+    --cidfile %t/wellknown.ctr-id --cgroups=no-conmon \
+    --replace -d --name wellknown \
+    --publish 127.0.0.1:${WELLKNOWN_PORT}:8080 \
+    --volume %E/state/web/wellknown:/srv:ro,Z \
+    --env=SERVER_FALLBACK_PAGE= \
+    ${KETESA_IMAGE} \
+    --root /srv --port 8080 --ignore-hidden-files false --directory-listing false --cors-allow-origins *
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/wellknown.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/wellknown.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/wellknown.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Synapse reads the smarthost settings at start
+systemctl --user try-restart synapse.service || true

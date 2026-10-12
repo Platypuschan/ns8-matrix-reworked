@@ -1,0 +1,113 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Configure Matrix",
+    "$id": "http://nethserver.org/json-schema/task/input/matrix-reworked/configure-module",
+    "description": "Configure the Synapse homeserver, its web apps and bridges",
+    "examples": [
+        {
+            "host": "matrix.example.org",
+            "lets_encrypt": true,
+            "http2https": true
+        },
+        {
+            "server_name": "example.org",
+            "host": "matrix.example.org",
+            "lets_encrypt": true,
+            "http2https": true,
+            "user_domain": "ad.example.org",
+            "federation": true,
+            "wellknown_on_server_name": true,
+            "element_host": "chat.example.org",
+            "cinny_host": "",
+            "ketesa_host": "matrix-admin.example.org",
+            "mail_from": "matrix@example.org",
+            "max_upload_mb": 100,
+            "bridges": ["whatsapp", "signal", "telegram"],
+            "telegram_api_id": "12345",
+            "telegram_api_hash": "0123456789abcdef0123456789abcdef"
+        }
+    ],
+    "type": "object",
+    "required": [
+        "host",
+        "lets_encrypt",
+        "http2https"
+    ],
+    "properties": {
+        "server_name": {
+            "type": "string",
+            "description": "Matrix server name, the part after ':' in user IDs. Empty uses host. Cannot be changed after the first configuration.",
+            "maxLength": 253
+        },
+        "host": {
+            "type": "string",
+            "description": "Host name of the homeserver (client and federation API), like 'matrix.example.org'",
+            "format": "hostname",
+            "pattern": "\\."
+        },
+        "lets_encrypt": {
+            "type": "boolean",
+            "description": "Request Let's Encrypt certificates for all host names"
+        },
+        "http2https": {
+            "type": "boolean",
+            "description": "Redirect HTTP requests to HTTPS"
+        },
+        "user_domain": {
+            "type": "string",
+            "description": "NS8 user domain whose users log in with their password; empty allows local accounts only"
+        },
+        "federation": {
+            "type": "boolean",
+            "description": "Talk to other Matrix servers"
+        },
+        "wellknown_on_server_name": {
+            "type": "boolean",
+            "description": "Route https://<server_name>/.well-known/matrix to Synapse (only if server_name differs from host)"
+        },
+        "element_host": {
+            "type": "string",
+            "description": "Host name for Element Web; empty disables it",
+            "maxLength": 253
+        },
+        "cinny_host": {
+            "type": "string",
+            "description": "Host name for Cinny; empty disables it",
+            "maxLength": 253
+        },
+        "ketesa_host": {
+            "type": "string",
+            "description": "Host name for the Ketesa admin UI; empty disables it",
+            "maxLength": 253
+        },
+        "mail_from": {
+            "type": "string",
+            "description": "Sender address of notification mails; empty uses noreply@<server_name>",
+            "maxLength": 254
+        },
+        "max_upload_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10240
+        },
+        "bridges": {
+            "type": "array",
+            "description": "Enabled mautrix bridges",
+            "items": {
+                "type": "string",
+                "enum": ["whatsapp", "signal", "telegram", "meta", "gmessages", "slack", "discord", "bluesky", "twitter", "linkedin"]
+            },
+            "uniqueItems": true
+        },
+        "telegram_api_id": {
+            "type": "string",
+            "description": "Telegram API ID from my.telegram.org (required for the Telegram bridge)",
+            "maxLength": 20
+        },
+        "telegram_api_hash": {
+            "type": "string",
+            "description": "Telegram API hash; empty keeps the stored one",
+            "maxLength": 64
+        }
+    }
+}

@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Synapse reads the LDAP proxy settings of its user domain at start.
+
+import json
+import subprocess
+import sys
+
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_setup
+
+try:
+    event = json.load(sys.stdin)
+except (json.JSONDecodeError, TypeError):
+    sys.exit(0)
+domain = matrix_setup.read_settings().get("user_domain")
+if domain and domain in event.get("domains", []):
+    subprocess.run(["systemctl", "--user", "try-restart", "synapse.service"], check=False)
