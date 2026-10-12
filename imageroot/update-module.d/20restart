@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
-# Write the configuration of the new release (new bridge versions too) and
+# Write the configuration of the new release and
 # restart the running services with it and with the new images.
 
 import os
@@ -16,6 +16,11 @@ import matrix_runtime
 import matrix_setup
 
 subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+# Bridges were built in before 0.3.0; they are modules of their own now
+legacy = subprocess.run(["systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", "bridge@*.service"],
+                        capture_output=True, text=True, check=False).stdout.split()
+for unit in [item for item in legacy if item.startswith("bridge@")]:
+    subprocess.run(["systemctl", "--user", "disable", "--now", unit], check=False)
 settings = matrix_setup.read_settings()
 if not settings.get("host"):
     sys.exit(0)
@@ -38,7 +43,8 @@ if settings.get("turn"):
     units.append("coturn.service")
 if settings.get("element_call"):
     units += ["livekit.service", "lk-jwt.service"]
-units += [f"bridge@{key}.service" for key in settings["bridges"]]
+if settings.get("draupnir"):
+    units.append("draupnir.service")
 for unit in units:
     subprocess.run(["systemctl", "--user", "try-restart", unit], check=True)
 for name in os.listdir("."):
@@ -47,3 +53,4 @@ for name in os.listdir("."):
 # A stopped module stays stopped; the next configure-module creates the admin
 if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "synapse.service"]).returncode == 0:
     subprocess.run(["ensure-admin"], check=True)
+subprocess.run(["publish-matrix-changed"], check=False)

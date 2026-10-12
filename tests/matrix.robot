@@ -1,6 +1,7 @@
 *** Settings ***
 Library    SSHLibrary
 Library    String
+Library    Collections
 Test Setup    Stop after a failed step
 
 *** Variables ***
@@ -23,6 +24,7 @@ ${room_id}           ${EMPTY}
 # overwrite ${ADMIN_PASSWORD} of the cluster-admin login below.
 ${matrix_admin_password}    ${EMPTY}
 ${admin_token}       ${EMPTY}
+&{user_tokens}
 ${ADMIN_USER}        admin
 ${ADMIN_PASSWORD}    Nethesis,1234
 
@@ -55,7 +57,7 @@ Run action
 
 Configure current module
     [Arguments]    &{extra}
-    ${payload} =    Evaluate    json.dumps({"host": $HOST, "server_name": $SERVER_NAME, "http2https": False, "lets_encrypt": False, "user_domain": $USER_DOMAIN, "federation": True, "wellknown_on_server_name": True, "element_host": $ELEMENT_HOST, "cinny_host": $CINNY_HOST, "ketesa_host": $KETESA_HOST, "bridges": ["whatsapp", "discord"], "turn": True, "element_call": True, **$extra})    modules=json
+    ${payload} =    Evaluate    json.dumps({"host": $HOST, "server_name": $SERVER_NAME, "http2https": False, "lets_encrypt": False, "user_domain": $USER_DOMAIN, "federation": True, "wellknown_on_server_name": True, "element_host": $ELEMENT_HOST, "cinny_host": $CINNY_HOST, "ketesa_host": $KETESA_HOST, "turn": True, "element_call": True, "draupnir": True, "shared_secret_auth": True, "state_compressor": True, **$extra})    modules=json
     ${output}    ${rc} =    Run action    configure-module    ${payload}
     Should Be Equal As Integers    ${rc}    0    configure-module failed: ${output}
 
@@ -82,7 +84,14 @@ Matrix
 
 Token of
     [Arguments]    ${user}    ${password}
+    # Synapse allows 5 logins per client address, then about one every 5
+    # minutes, and every test login comes from 127.0.0.1: log in once per user
+    ${known} =    Evaluate    $user in $user_tokens
+    IF    ${known}
+        RETURN    ${user_tokens}[${user}]
+    END
     ${login} =    Matrix    login    ${user}    '${password}'
+    Set To Dictionary    ${user_tokens}    ${user}=${login}[access_token]
     RETURN    ${login}[access_token]
 
 Read admin credentials
@@ -105,11 +114,6 @@ Container id
     [Arguments]    ${name}
     ${id} =    Execute Command    runagent -m ${module_id} podman inspect --format {{.Id}} ${name}
     RETURN    ${id}
-
-Bot answers
-    [Arguments]    ${bot}
-    ${result} =    Matrix    bot-reply    @${bot}:${SERVER_NAME}    token=${admin_token}
-    Should Not Be Empty    ${result}[reply]
 
 Users chat through the LDAP domain
     ${token1} =    Token of    user1    ${USER_PASSWORD}
@@ -143,7 +147,12 @@ Add module for ${SCENARIO} scenario
     Set Suite Variable    ${module_id}    ${output.module_id}
 
 Configure initial module
-    Configure current module
+    IF    r'${SCENARIO}' == 'update'
+        # The previous release still had built-in bridges; the update stops them
+        Configure current module    bridges=${{["whatsapp", "discord"]}}
+    ELSE
+        Configure current module
+    END
     Read admin credentials
     IF    r'${SCENARIO}' == 'update'
         # Data written before the update must survive it
@@ -202,11 +211,79 @@ Wrong password is rejected
     ${result} =    Matrix    bad-login    user1    wrong-password
     Should Be Equal    ${result}[errcode]    M_FORBIDDEN
 
-Bridge bots answer
-    Unit is    bridge@whatsapp.service    active
-    Unit is    bridge@discord.service    active
-    Bot answers    whatsappbot
-    Bot answers    discordbot
+Built-in bridges of older releases are stopped
+    Skip If    r'${SCENARIO}' != 'update'    only releases before 0.3.0 had built-in bridges
+    Unit is    bridge@whatsapp.service    inactive
+    Unit is    bridge@discord.service    inactive
+    ${rc} =    Execute Command    runagent -m ${module_id} test ! -e synapse/appservices/whatsapp.yaml
+    ...    return_rc=True    return_stdout=False
+    Should Be Equal As Integers    ${rc}    0    Synapse still loads the registration of a built-in bridge
+
+Bridge modules can register an appservice
+    ${payload} =    Evaluate    json.dumps({"module": "ci-bridge1", "registration": {"id": "ci-bridge", "url": "http://127.0.0.1:29999", "as_token": "ci-as-token-0123456789", "hs_token": "ci-hs-token-0123456789", "sender_localpart": "cibot", "namespaces": {"users": [{"regex": "^@ci_.*:" + re.escape($SERVER_NAME) + "$", "exclusive": True}]}}})    modules=json,re
+    ${output}    ${rc} =    Run action    add-appservice    ${payload}
+    Should Be Equal As Integers    ${rc}    0    add-appservice failed: ${output}
+    &{info} =    Evaluate    json.loads(r'''${output}''')    modules=json
+    Should Be Equal    ${info.server_name}    ${SERVER_NAME}
+    Should Start With    ${info.homeserver_url}    http://127.0.0.1:
+    Should Start With    ${info.double_puppet_secret}    as_token:
+    # Synapse loaded it: the appservice token logs in as its sender
+    ${whoami} =    Matrix    whoami    token=ci-as-token-0123456789
+    Should Be Equal    ${whoami}[user_id]    @cibot:${SERVER_NAME}
+    &{config} =    Get configuration
+    Should Be Equal    ${config.appservices}    ${{[{"id": "ci-bridge", "module": "ci-bridge1"}]}}
+    ${output}    ${rc} =    Execute Command    api-cli run module/${module_id}/get-matrix-info
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}    0    get-matrix-info failed: ${output}
+    Should Contain    ${output}    "server_name": "${SERVER_NAME}"
+
+Appservices that claim local users are rejected
+    ${output}    ${rc} =    Run action    add-appservice    {"module": "ci-evil1", "registration": {"id": "ci-evil", "url": "http://127.0.0.1:29998", "as_token": "evil-as-token-0123456789", "hs_token": "evil-hs-token-0123456789", "sender_localpart": "evilbot", "namespaces": {"users": [{"regex": "@.*", "exclusive": true}]}}}
+    Should Not Be Equal As Integers    ${rc}    0
+    Should Contain    ${output}    namespace_too_wide
+    ${output}    ${rc} =    Run action    add-appservice    {"module": "ci-evil1", "registration": {"id": "ci-evil", "url": "http://10.0.0.5:29998", "as_token": "evil-as-token-0123456789", "hs_token": "evil-hs-token-0123456789", "sender_localpart": "evilbot", "namespaces": {}}}
+    Should Not Be Equal As Integers    ${rc}    0
+    Should Contain    ${output}    url_not_on_this_node
+
+An appservice can be removed
+    ${output}    ${rc} =    Run action    remove-appservice    {"id": "ci-bridge"}
+    Should Be Equal As Integers    ${rc}    0    remove-appservice failed: ${output}
+    Should Contain    ${output}    "removed": true
+    ${output}    ${rc} =    Execute Command    python3 /root/matrix_client.py --host ${HOST} --token ci-as-token-0123456789 whoami
+    ...    return_rc=True
+    Should Not Be Equal As Integers    ${rc}    0    the removed appservice token still works
+    &{config} =    Get configuration
+    Should Be Empty    ${config.appservices}
+
+Draupnir answers in its management room
+    Unit is    draupnir.service    active
+    Read admin credentials
+    &{config} =    Get configuration
+    Should Start With    ${config.draupnir_management_room}    !
+    ${answer} =    Matrix    room-command    '${config.draupnir_management_room}'    @draupnir:${SERVER_NAME}    '!draupnir status'    token=${admin_token}
+    Should Not Be Empty    ${answer}[reply]
+
+Shared-secret login works
+    &{config} =    Get configuration
+    Should Not Be Empty    ${config.shared_secret_auth_secret}
+    # Directly to Synapse with an address of its own: the earlier logins of
+    # the suite used up the rate limit of 127.0.0.1
+    ${port} =    Execute Command    runagent -m ${module_id} sh -c '. ./ports.env; echo $SYNAPSE_PORT'
+    ${direct} =    Set Variable    python3 /root/matrix_client.py --host ${HOST} --direct-port ${port}
+    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.21 ssa-login -- @user1:${SERVER_NAME} ${config.shared_secret_auth_secret}
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}    0    shared-secret login failed: ${output}
+    Should Contain    ${output}    "user_id": "@user1:${SERVER_NAME}"
+    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.22 ssa-login -- @user1:${SERVER_NAME} wrong-secret 2>&1
+    ...    return_rc=True
+    Should Not Be Equal As Integers    ${rc}    0    a wrong shared secret was accepted
+    Should Contain    ${output}    M_FORBIDDEN
+
+State compressor runs
+    Unit is    synapse-compressor.timer    active
+    ${output}    ${rc} =    Execute Command    runagent -m ${module_id} systemctl --user start synapse-compressor.service
+    ...    return_rc=True    return_stderr=True    return_stdout=False
+    Should Be Equal As Integers    ${rc}    0    the compressor run failed: ${output}
 
 TURN server answers and is announced
     Unit is    coturn.service    active
@@ -249,26 +326,15 @@ Web apps are served
 
 Saving unchanged settings keeps the services running
     ${synapse} =    Container id    synapse
-    ${bridge} =    Container id    bridge-whatsapp
+    ${bot} =    Container id    draupnir
     Configure current module
     ${after} =    Container id    synapse
     Should Be Equal    ${after}    ${synapse}    Synapse was restarted although nothing changed
-    ${after} =    Container id    bridge-whatsapp
-    Should Be Equal    ${after}    ${bridge}    the WhatsApp bridge was restarted although nothing changed
-
-A bridge can be disabled
-    Configure current module    bridges=${{["whatsapp"]}}
-    Unit is    bridge@discord.service    inactive
-    Unit is    bridge@whatsapp.service    active
-    ${rc} =    Execute Command    runagent -m ${module_id} test ! -e synapse/appservices/discord.yaml
-    ...    return_rc=True    return_stdout=False
-    Should Be Equal As Integers    ${rc}    0    the Discord registration is still loaded by Synapse
-    &{config} =    Get configuration
-    Should Be Equal    ${config.bridges}    ${{["whatsapp"]}}
-    Bot answers    whatsappbot
+    ${after} =    Container id    draupnir
+    Should Be Equal    ${after}    ${bot}    Draupnir was restarted although nothing changed
 
 Calls can be disabled
-    Configure current module    bridges=${{["whatsapp"]}}    turn=${False}    element_call=${False}
+    Configure current module    turn=${False}    element_call=${False}
     Unit is    coturn.service    inactive
     Unit is    livekit.service    inactive
     Unit is    lk-jwt.service    inactive
@@ -277,7 +343,7 @@ Calls can be disabled
     Should Not Be Equal As Integers    ${rc}    0    the firewall service of the call ports remains
     ${turn} =    Matrix    get    /_matrix/client/v3/voip/turnServer    token=${admin_token}
     Should Not Contain    ${turn}[body]    uris
-    Configure current module    bridges=${{["whatsapp"]}}
+    Configure current module
     Unit is    coturn.service    active
     Unit is    livekit.service    active
 
@@ -285,9 +351,6 @@ Invalid settings are rejected
     ${output}    ${rc} =    Run action    configure-module    {"host": "${HOST}", "server_name": "other.test", "http2https": false, "lets_encrypt": false}
     Should Not Be Equal As Integers    ${rc}    0
     Should Contain    ${output}    server_name_immutable
-    ${output}    ${rc} =    Run action    configure-module    {"host": "${HOST}", "http2https": false, "lets_encrypt": false, "bridges": ["telegram"]}
-    Should Not Be Equal As Integers    ${rc}    0
-    Should Contain    ${output}    telegram_credentials_required
     ${output}    ${rc} =    Run action    configure-module    {"host": "${HOST}", "http2https": false, "lets_encrypt": false, "element_host": "${HOST}"}
     Should Not Be Equal As Integers    ${rc}    0
     Should Contain    ${output}    hostname_already_used
@@ -298,8 +361,8 @@ Invalid settings are rejected
     Should Be Equal    ${config.element_host}    ${ELEMENT_HOST}
 
 Secrets stay in private files
-    ${modes} =    Execute Command    runagent -m ${module_id} stat -c '%a' matrix.json postgres.env synapse synapse/homeserver.yaml bridges/whatsapp/config.yaml calls calls/turnserver.conf calls/livekit.yaml calls/lk-jwt.env
-    Should Be Equal    ${modes}    600\n600\n700\n600\n600\n700\n600\n600\n600
+    ${modes} =    Execute Command    runagent -m ${module_id} stat -c '%a' matrix.json postgres.env synapse synapse/homeserver.yaml appservices.json calls calls/turnserver.conf calls/livekit.yaml calls/lk-jwt.env draupnir draupnir/provisioned.json compressor.env
+    Should Be Equal    ${modes}    600\n600\n700\n600\n600\n700\n600\n600\n600\n700\n600\n600
     ${environment} =    Execute Command    runagent -m ${module_id} cat environment
     Should Not Contain    ${environment}    ${matrix_admin_password}
     Should Not Contain    ${environment}    PASSWORD
@@ -308,16 +371,15 @@ Database dump and restore keep the data
     ${output}    ${rc} =    Execute Command    runagent -m ${module_id} module-dump-state
     ...    return_rc=True    return_stderr=True    return_stdout=False
     Should Be Equal As Integers    ${rc}    0    dump failed: ${output}
-    ${dump} =    Execute Command    runagent -m ${module_id} grep -c -E '^CREATE DATABASE (synapse|mautrix_whatsapp) ' postgresql.pg_dump
-    Should Be Equal    ${dump}    2
+    ${dump} =    Execute Command    runagent -m ${module_id} grep -c -E '^CREATE DATABASE synapse ' postgresql.pg_dump
+    Should Be Equal    ${dump}    1
     # The same steps as restore-module: new data volume from the dump, then
     # configure-module with the stored settings
     ${output}    ${rc} =    Execute Command    runagent -m ${module_id} restore-database
     ...    return_rc=True    return_stderr=True    return_stdout=False
     Should Be Equal As Integers    ${rc}    0    restore failed: ${output}
-    Configure current module    bridges=${{["whatsapp"]}}
+    Configure current module
     user2 reads the message
-    Bot answers    whatsappbot
     ${rc} =    Execute Command    runagent -m ${module_id} module-dump-state
     ...    return_rc=True    return_stdout=False
     Should Be Equal As Integers    ${rc}    0    second dump failed
@@ -328,9 +390,9 @@ Database dump and restore keep the data
     ...    return_rc=True    return_stdout=False
     Should Be Equal As Integers    ${rc}    0    the dump remains after cleanup
 
-Backup includes settings, bridges, dump and media
+Backup includes settings, appservices, dump and media
     ${include} =    Execute Command    runagent -m ${module_id} sh -c 'cat ../etc/state-include.conf'
-    FOR    ${line}    IN    state/matrix.json    state/postgresql.pg_dump    state/bridges    volumes/synapse-data
+    FOR    ${line}    IN    state/matrix.json    state/postgresql.pg_dump    state/appservices.json    state/draupnir    volumes/synapse-data
         Should Match Regexp    ${include}    (?m)^${line}$
     END
 
@@ -352,8 +414,8 @@ Module UI loads in cluster-admin
     Get Property    iframe >>> input#server-name    value    ==    ${SERVER_NAME}
     Get Property    iframe >>> input#admin-user    value    ==    @matrixadmin:${SERVER_NAME}
     Get Property    iframe >>> input#homeserver-url    value    ==    https://${HOST}/
-    Get Property    iframe >>> input#bridge-whatsapp    checked    ==    ${True}
-    Get Property    iframe >>> input#bridge-discord    checked    ==    ${False}
+    # Bridges are modules of their own; none is registered here
+    Get Text    iframe >>> h4 >> text="Bridges"
     Take Screenshot    filename=${OUTPUT DIR}/browser/screenshot/2._Settings.png
     Close Browser
 

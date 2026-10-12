@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "Configure Matrix",
     "$id": "http://nethserver.org/json-schema/task/input/matrix-reworked/configure-module",
-    "description": "Configure the Synapse homeserver, its web apps and bridges",
+    "description": "Configure the Synapse homeserver, its web apps, calls and maintenance",
     "examples": [
         {
             "host": "matrix.example.org",
@@ -22,16 +22,12 @@
             "ketesa_host": "matrix-admin.example.org",
             "mail_from": "matrix@example.org",
             "max_upload_mb": 100,
-            "bridges": [
-                "whatsapp",
-                "signal",
-                "telegram"
-            ],
-            "telegram_api_id": "12345",
-            "telegram_api_hash": "0123456789abcdef0123456789abcdef",
             "turn": true,
             "element_call": true,
-            "calls_public_ip": ""
+            "calls_public_ip": "",
+            "draupnir": true,
+            "state_compressor": true,
+            "shared_secret_auth": false
         }
     ],
     "type": "object",
@@ -97,36 +93,6 @@
             "minimum": 1,
             "maximum": 10240
         },
-        "bridges": {
-            "type": "array",
-            "description": "Enabled mautrix bridges",
-            "items": {
-                "type": "string",
-                "enum": [
-                    "whatsapp",
-                    "signal",
-                    "telegram",
-                    "meta",
-                    "gmessages",
-                    "slack",
-                    "discord",
-                    "bluesky",
-                    "twitter",
-                    "linkedin"
-                ]
-            },
-            "uniqueItems": true
-        },
-        "telegram_api_id": {
-            "type": "string",
-            "description": "Telegram API ID from my.telegram.org (required for the Telegram bridge)",
-            "maxLength": 20
-        },
-        "telegram_api_hash": {
-            "type": "string",
-            "description": "Telegram API hash; empty keeps the stored one",
-            "maxLength": 64
-        },
         "turn": {
             "type": "boolean",
             "description": "Run the coturn TURN server (UDP) for calls; Synapse and LiveKit use it"
@@ -139,6 +105,18 @@
             "type": "string",
             "description": "Public IP address of the node for TURN and LiveKit media; empty: coturn uses the node addresses, LiveKit asks a STUN server",
             "maxLength": 45
+        },
+        "draupnir": {
+            "type": "boolean",
+            "description": "Run the Draupnir moderation bot with a management room for the module admin"
+        },
+        "state_compressor": {
+            "type": "boolean",
+            "description": "Compress the Synapse room state tables every night (synapse_auto_compressor)"
+        },
+        "shared_secret_auth": {
+            "type": "boolean",
+            "description": "Load matrix-synapse-shared-secret-auth: trusted tools log in as any local user with a token derived from the shared secret"
         }
     }
 }

@@ -1,0 +1,39 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# Draupnir moderation bot. provision-draupnir creates its account, the
+# management room and state/draupnir/config/production.yaml; Draupnir keeps
+# its own data (policy list cache, protections state) in state/draupnir.
+#
+
+[Unit]
+Description=Draupnir Matrix moderation bot
+Wants=synapse.service
+After=synapse.service
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+WorkingDirectory=%E/state
+Restart=always
+RestartSec=10s
+TimeoutStopSec=30
+ExecStartPre=/bin/rm -f %t/draupnir.pid %t/draupnir.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/draupnir.pid \
+    --cidfile %t/draupnir.ctr-id --cgroups=no-conmon \
+    --replace -d --name draupnir \
+    --network=host \
+    --volume %E/state/draupnir:/data:Z \
+    ${DRAUPNIR_IMAGE} \
+    bot --draupnir-config /data/config/production.yaml
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/draupnir.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/draupnir.ctr-id
+SuccessExitStatus=137 143
+SyslogIdentifier=%u
+PIDFile=%t/draupnir.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

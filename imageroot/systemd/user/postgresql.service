@@ -3,7 +3,7 @@
 #
 
 #
-# PostgreSQL for Synapse and the bridges (one database each). It shares the
+# PostgreSQL for Synapse. It shares the
 # host network namespace and listens on 127.0.0.1:${POSTGRES_PORT} only;
 # PGPORT also makes psql and pg_dumpall inside the container use that port.
 #

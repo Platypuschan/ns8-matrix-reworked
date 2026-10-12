@@ -1,0 +1,49 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Homeserver details for bridge modules",
+    "$id": "http://nethserver.org/json-schema/task/output/matrix-reworked/get-matrix-info",
+    "examples": [
+        {
+            "api_version": 1,
+            "server_name": "example.org",
+            "homeserver_url": "http://127.0.0.1:20001",
+            "public_url": "https://matrix.example.org",
+            "federation": true,
+            "admin_user": "@matrixadmin:example.org",
+            "double_puppet_secret": "as_token:abc"
+        }
+    ],
+    "type": "object",
+    "required": [
+        "api_version",
+        "server_name",
+        "homeserver_url",
+        "public_url",
+        "federation",
+        "admin_user",
+        "double_puppet_secret"
+    ],
+    "properties": {
+        "api_version": {
+            "type": "integer"
+        },
+        "server_name": {
+            "type": "string"
+        },
+        "homeserver_url": {
+            "type": "string"
+        },
+        "public_url": {
+            "type": "string"
+        },
+        "federation": {
+            "type": "boolean"
+        },
+        "admin_user": {
+            "type": "string"
+        },
+        "double_puppet_secret": {
+            "type": "string"
+        }
+    }
+}

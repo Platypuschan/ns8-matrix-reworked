@@ -9,7 +9,6 @@ exec 1>&2
 
 # shellcheck disable=SC1091
 source ports.env
-mapfile -t bridges < <(python3 -c 'import json; print("\n".join(json.load(open("matrix.json"))["bridges"]))')
 mapfile -t web_apps < <(python3 -c '
 import json
 s = json.load(open("matrix.json"))
@@ -50,18 +49,29 @@ for item in "${web_apps[@]}"; do
     fi
 done
 
-# Stop the bridges that are no longer enabled
+# Bridges were built in before 0.3.0; they are modules of their own now
 while read -r unit _; do
-    key="${unit#bridge@}"
-    key="${key%.service}"
-    if [[ " ${bridges[*]} " != *" ${key} "* ]]; then
-        systemctl --user disable --now "${unit}"
-        rm -f "restart-needed-bridge-${key}"
-    fi
+    systemctl --user disable --now "${unit}"
 done < <(systemctl --user list-units --all --plain --no-legend 'bridge@*.service')
-for key in "${bridges[@]}"; do
-    start_or_restart "bridge@${key}.service" "restart-needed-bridge-${key}"
-done
+rm -f restart-needed-bridge-*
 
 # The admin account needs a running Synapse
 ensure-admin
+
+# Draupnir needs its account and management room first
+if [[ "$(python3 -c 'import json; print(json.load(open("matrix.json")).get("draupnir", False))')" == True ]]; then
+    provision-draupnir
+    start_or_restart draupnir.service restart-needed-draupnir
+else
+    systemctl --user disable --now draupnir.service
+    rm -f restart-needed-draupnir
+fi
+
+if [[ "$(python3 -c 'import json; print(json.load(open("matrix.json")).get("state_compressor", True))')" == True ]]; then
+    systemctl --user enable --now synapse-compressor.timer
+else
+    systemctl --user disable --now synapse-compressor.timer
+fi
+
+# Bridge modules read get-matrix-info again (new ports, server settings)
+publish-matrix-changed

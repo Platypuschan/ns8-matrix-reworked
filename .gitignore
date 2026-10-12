@@ -106,3 +106,6 @@ dist
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Downloaded by build-images.sh
+imageroot/synapse-modules/*.py

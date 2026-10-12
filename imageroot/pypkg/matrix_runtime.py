@@ -5,7 +5,7 @@
 """Write the configuration files of the Matrix module and talk to Synapse.
 
 matrix_setup builds the content; this module writes it below the state
-directory, runs the bridge images to complete their configuration and
+directory, keeps the registrations of bridge modules and
 creates the admin account.
 """
 
@@ -13,9 +13,9 @@ import hashlib
 import hmac
 import json
 import os
-import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import matrix_setup as setup
@@ -23,22 +23,6 @@ import matrix_setup as setup
 PORTS_ENV = "ports.env"
 POSTGRES_ENV = "postgres.env"
 ADMIN_FLAG = "admin-created"
-
-
-def load_yaml(path):
-    import yaml
-
-    try:
-        with open(path, "r", encoding="utf-8") as stream:
-            return yaml.safe_load(stream) or {}
-    except FileNotFoundError:
-        return None
-
-
-def dump_yaml(document):
-    import yaml
-
-    return yaml.safe_dump(document, sort_keys=False, default_flow_style=False, allow_unicode=True, width=1000)
 
 
 def write_public(path, content):
@@ -82,19 +66,70 @@ def write_ports(port_map, state_dir="."):
     return write_public(os.path.join(state_dir, PORTS_ENV), "\n".join(lines) + "\n")
 
 
+def read_appservices(state_dir="."):
+    try:
+        with open(os.path.join(state_dir, setup.APPSERVICES), "r", encoding="utf-8") as stream:
+            return json.load(stream)
+    except FileNotFoundError:
+        return {}
+
+
+def add_appservice(owner, registration, state_dir="."):
+    """Store the registration of a bridge module (replacing its earlier one);
+    raise setup.SettingsError for an invalid one. Call with the settings lock."""
+    settings = setup.ensure_settings(state_dir)
+    appservices = read_appservices(state_dir)
+    clean = setup.validate_registration(registration, settings, owner, appservices)
+    appservices[clean["id"]] = {"module": owner, "registration": clean}
+    setup.write_json(os.path.join(state_dir, setup.APPSERVICES), appservices)
+    return clean
+
+
+def remove_appservice(owner, appservice_id, state_dir="."):
+    """Remove a registration; a module can remove only its own. Return True
+    if it existed. Call with the settings lock."""
+    appservices = read_appservices(state_dir)
+    entry = appservices.get(appservice_id)
+    if entry is None:
+        return False
+    if owner is not None and entry["module"] != owner:
+        raise setup.SettingsError("id", appservice_id, "appservice_of_other_module")
+    del appservices[appservice_id]
+    setup.write_json(os.path.join(state_dir, setup.APPSERVICES), appservices)
+    return True
+
+
+def render_appservices(settings, state_dir="."):
+    """Write the registration files Synapse loads; return their IDs."""
+    directory = os.path.join(state_dir, setup.APPSERVICE_DIR)
+    setup.private_dir(directory)
+    appservices = read_appservices(state_dir)
+    changed = setup.write_json(
+        os.path.join(directory, setup.DOUBLE_PUPPET_ID + ".yaml"),
+        setup.double_puppet_registration(settings),
+    )
+    for appservice_id, entry in appservices.items():
+        changed |= setup.write_json(os.path.join(directory, appservice_id + ".yaml"), entry["registration"])
+    # Bridges that were removed, also the built-in bridges before 0.3.0
+    keep = {setup.DOUBLE_PUPPET_ID + ".yaml"} | {key + ".yaml" for key in appservices}
+    for name in os.listdir(directory):
+        if name not in keep:
+            os.remove(os.path.join(directory, name))
+            changed = True
+    if changed:
+        setup.flag_restart("synapse", state_dir)
+    return sorted(appservices)
+
+
 def render_synapse(settings, port_map, ldap=None, smarthost=None, state_dir=".", udp_map=None):
     """Write the Synapse configuration; flag a restart if it changed."""
     setup.private_dir(os.path.join(state_dir, setup.SYNAPSE_DIR))
-    setup.private_dir(os.path.join(state_dir, setup.APPSERVICE_DIR))
+    appservice_ids = render_appservices(settings, state_dir)
     changed = setup.write_json(
         os.path.join(state_dir, setup.SYNAPSE_DIR, "homeserver.yaml"),
-        setup.homeserver_config(settings, port_map, ldap, smarthost, udp_map),
+        setup.homeserver_config(settings, port_map, ldap, smarthost, udp_map, appservice_ids),
     )
     changed |= setup.write_json(os.path.join(state_dir, setup.SYNAPSE_DIR, "log.config"), setup.log_config())
-    changed |= setup.write_json(
-        os.path.join(state_dir, setup.APPSERVICE_DIR, setup.DOUBLE_PUPPET_ID + ".yaml"),
-        setup.double_puppet_registration(settings),
-    )
     if changed:
         setup.flag_restart("synapse", state_dir)
     return changed
@@ -146,77 +181,13 @@ def render_calls(settings, port_map, udp_map, state_dir="."):
             setup.flag_restart(service, state_dir)
 
 
-def podman(*args, runner=subprocess.run):
-    return runner(("podman",) + args, check=True)
-
-
-def ensure_image(image, runner=subprocess.run):
-    if runner(("podman", "image", "exists", image)).returncode != 0:
-        podman("pull", image, runner=runner)
-
-
-def generate_registration(key, state_dir=".", runner=subprocess.run):
-    """Let the bridge complete its configuration and write its appservice
-    registration (new as_token and hs_token)."""
-    env = setup.bridge_unit_env(key)
-    ensure_image(env["BRIDGE_IMAGE"], runner=runner)
-    directory = os.path.abspath(os.path.join(state_dir, setup.BRIDGES_DIR, key))
-    podman(
-        "run", "--rm", "--network=none",
-        "--volume", f"{directory}:/data:Z",
-        "--entrypoint", env["BRIDGE_BINARY"],
-        env["BRIDGE_IMAGE"],
-        "-g", "-c", "/data/config.yaml", "-r", "/data/registration.yaml",
-        runner=runner,
-    )
-
-
-def prepare_bridge(key, settings, port_map, state_dir=".", runner=subprocess.run):
-    """Write the configuration of an enabled bridge and its registration
-    for Synapse."""
-    directory = os.path.join(state_dir, setup.BRIDGES_DIR, key)
-    setup.private_dir(os.path.join(state_dir, setup.BRIDGES_DIR))
-    setup.private_dir(directory)
-    env = "".join(f"{name}={value}\n" for name, value in setup.bridge_unit_env(key).items())
-    if setup.write_private(os.path.join(directory, "unit.env"), env):
-        setup.flag_restart(f"bridge-{key}", state_dir)
-
-    config_path = os.path.join(directory, "config.yaml")
-    current = load_yaml(config_path)
-    patched = setup.patch_bridge_config(current, key, settings, port_map)
-    if patched != current:
-        setup.write_private(config_path, dump_yaml(patched))
-        setup.flag_restart(f"bridge-{key}", state_dir)
-
-    registration_path = os.path.join(directory, "registration.yaml")
-    if not os.path.exists(registration_path):
-        generate_registration(key, state_dir, runner=runner)
-        setup.flag_restart(f"bridge-{key}", state_dir)
-    registration = setup.patch_registration(load_yaml(registration_path), key, port_map)
-    content = dump_yaml(registration)
-    setup.write_private(registration_path, content)
-    if setup.write_private(os.path.join(state_dir, setup.APPSERVICE_DIR, key + ".yaml"), content):
-        setup.flag_restart("synapse", state_dir)
-
-
-def remove_disabled_registrations(settings, state_dir="."):
-    """Synapse must not push to bridges that are not running. Their
-    configuration and database are kept for a later re-enable."""
-    directory = os.path.join(state_dir, setup.APPSERVICE_DIR)
-    keep = {setup.DOUBLE_PUPPET_ID + ".yaml"} | {key + ".yaml" for key in settings["bridges"]}
-    for name in os.listdir(directory):
-        if name not in keep:
-            os.remove(os.path.join(directory, name))
-            setup.flag_restart("synapse", state_dir)
-
-
 def write_postgres_env(settings, state_dir="."):
     # Used by initdb only; changing it later has no effect on the database
     content = f"POSTGRES_PASSWORD={settings['secrets']['postgres_password']}\n"
     return setup.write_private(os.path.join(state_dir, POSTGRES_ENV), content)
 
 
-def render_all(settings, port_map, ldap=None, smarthost=None, state_dir=".", runner=subprocess.run, udp_map=None):
+def render_all(settings, port_map, ldap=None, smarthost=None, state_dir=".", udp_map=None):
     if write_ports(port_map, state_dir):
         # Every service reads its port at start
         for service in ["postgresql", "synapse", "wellknown", "livekit", "lk-jwt", *setup.WEB_APPS]:
@@ -225,16 +196,18 @@ def render_all(settings, port_map, ldap=None, smarthost=None, state_dir=".", run
     render_synapse(settings, port_map, ldap, smarthost, state_dir, udp_map)
     render_web(settings, state_dir)
     render_calls(settings, port_map, udp_map, state_dir)
-    for key in settings["bridges"]:
-        prepare_bridge(key, settings, port_map, state_dir, runner=runner)
-    remove_disabled_registrations(settings, state_dir)
+    env = "".join(f"{k}={v}\n" for k, v in setup.compressor_env(settings, port_map).items())
+    setup.write_private(os.path.join(state_dir, "compressor.env"), env)
 
 
 # --- Synapse API -------------------------------------------------------------
 
-def http_json(url, data=None, timeout=10):
+def http_json(url, data=None, timeout=10, token=None, method=None):
     body = None if data is None else json.dumps(data).encode()
-    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, json.load(response)
@@ -266,6 +239,107 @@ def registration_mac(secret, nonce, user, password, admin=True):
         mac.update(b"\x00")
     mac.update(b"admin" if admin else b"notadmin")
     return mac.hexdigest()
+
+
+def register_user(settings, port_map, localpart, password, admin, request=http_json):
+    """Register a local account with the shared-secret registration API;
+    an existing account is fine."""
+    base = f"http://127.0.0.1:{port_map['synapse']}/_synapse/admin/v1/register"
+    status, answer = request(base)
+    if status != 200:
+        raise RuntimeError(f"Synapse registration nonce request failed: HTTP {status}")
+    body = {
+        "nonce": answer["nonce"],
+        "username": localpart,
+        "password": password,
+        "admin": admin,
+        "mac": registration_mac(
+            settings["secrets"]["registration_shared_secret"], answer["nonce"], localpart, password, admin
+        ),
+    }
+    status, answer = request(base, body)
+    if status != 200 and answer.get("errcode") != "M_USER_IN_USE":
+        raise RuntimeError(f"Creating the account {localpart} failed: HTTP {status} {answer.get('errcode', '')}")
+
+
+DRAUPNIR_STATE = os.path.join(setup.DRAUPNIR_DIR, "provisioned.json")
+
+
+def read_draupnir_state(state_dir="."):
+    try:
+        with open(os.path.join(state_dir, DRAUPNIR_STATE), "r", encoding="utf-8") as stream:
+            return json.load(stream)
+    except FileNotFoundError:
+        return {}
+
+
+def provision_draupnir(settings, port_map, state_dir=".", request=http_json):
+    """Create the Draupnir bot account (server admin, for its admin
+    commands), lift its rate limits, create its management room with the
+    module admin as manager and write its configuration. Each step is kept
+    and done only once."""
+    setup.private_dir(os.path.join(state_dir, setup.DRAUPNIR_DIR))
+    setup.private_dir(os.path.join(state_dir, setup.DRAUPNIR_DIR, "config"))
+    state = read_draupnir_state(state_dir)
+    base = f"http://127.0.0.1:{port_map['synapse']}"
+    server_name = settings["server_name"]
+    bot = setup.user_id(setup.DRAUPNIR_LOCALPART, server_name)
+    password = settings["secrets"]["draupnir_password"]
+
+    def save():
+        setup.write_json(os.path.join(state_dir, DRAUPNIR_STATE), state)
+
+    if not state.get("access_token"):
+        register_user(settings, port_map, setup.DRAUPNIR_LOCALPART, password, True, request=request)
+        status, answer = request(f"{base}/_matrix/client/v3/login", {
+            "type": "m.login.password",
+            "identifier": {"type": "m.id.user", "user": setup.DRAUPNIR_LOCALPART},
+            "password": password,
+            "initial_device_display_name": "Draupnir",
+        })
+        if status != 200:
+            raise RuntimeError(f"Draupnir login failed: HTTP {status} {answer.get('errcode', '')}")
+        state["access_token"] = answer["access_token"]
+        save()
+    token = state["access_token"]
+    if not state.get("ratelimit_override"):
+        # Required: Draupnir acts on many rooms at once and crashes when
+        # Synapse rate-limits it
+        quoted = urllib.parse.quote(bot)
+        status, answer = request(f"{base}/_synapse/admin/v1/users/{quoted}/override_ratelimit",
+                                 {"messages_per_second": 0, "burst_count": 0}, token=token)
+        if status != 200:
+            raise RuntimeError(f"Draupnir rate limit override failed: HTTP {status} {answer.get('errcode', '')}")
+        state["ratelimit_override"] = True
+        save()
+    if not state.get("management_room"):
+        status, answer = request(f"{base}/_matrix/client/v3/createRoom", {
+            "preset": "private_chat",
+            "name": "Draupnir management",
+            "topic": "Commands for the Draupnir moderation bot, see !draupnir help",
+            "invite": [setup.user_id(setup.ADMIN_LOCALPART, server_name)],
+        }, token=token)
+        if status != 200:
+            raise RuntimeError(f"Creating the Draupnir management room failed: HTTP {status}")
+        state["management_room"] = answer["room_id"]
+        save()
+    config = setup.draupnir_config(settings, port_map, token, state["management_room"])
+    if setup.write_json(os.path.join(state_dir, setup.DRAUPNIR_DIR, "config", "production.yaml"), config):
+        setup.flag_restart("draupnir", state_dir)
+    return state
+
+
+def publish_changed(settings):
+    """Tell bridge modules to read get-matrix-info again (event
+    matrix-changed): the Synapse port or server settings may have changed."""
+    import agent
+
+    rdb = agent.redis_connect(privileged=True)
+    rdb.publish(f"{os.environ['AGENT_ID']}/event/matrix-changed", json.dumps({
+        "module_id": os.environ["MODULE_ID"],
+        "node": int(os.environ.get("NODE_ID", "0") or 0),
+        "server_name": settings.get("server_name", ""),
+    }))
 
 
 def ensure_admin(settings, port_map, state_dir=".", request=http_json):

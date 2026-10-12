@@ -1,0 +1,72 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Register an appservice",
+    "$id": "http://nethserver.org/json-schema/task/input/matrix-reworked/add-appservice",
+    "description": "Register or update the appservice of a bridge module. The URL must be on this node (http://127.0.0.1:<port>); exclusive user namespaces must not cover the users of the server.",
+    "examples": [
+        {
+            "registration": {
+                "id": "whatsapp",
+                "url": "http://127.0.0.1:20021",
+                "as_token": "4f0c0f2d9d2c4bb98e1f7b6c",
+                "hs_token": "c1a3b9e07a6d4f0f8d2e5a9b",
+                "sender_localpart": "whatsappbot",
+                "rate_limited": false,
+                "namespaces": {
+                    "users": [
+                        {
+                            "regex": "^@whatsapp_.*:example\\.org$",
+                            "exclusive": true
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "type": "object",
+    "required": [
+        "registration"
+    ],
+    "properties": {
+        "registration": {
+            "type": "object",
+            "required": [
+                "id",
+                "as_token",
+                "hs_token",
+                "sender_localpart"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+                },
+                "url": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "as_token": {
+                    "type": "string"
+                },
+                "hs_token": {
+                    "type": "string"
+                },
+                "sender_localpart": {
+                    "type": "string"
+                },
+                "rate_limited": {
+                    "type": "boolean"
+                },
+                "namespaces": {
+                    "type": "object"
+                }
+            }
+        },
+        "module": {
+            "type": "string",
+            "description": "Owner module ID, only for calls by a cluster admin"
+        }
+    }
+}

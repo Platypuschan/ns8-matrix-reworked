@@ -232,51 +232,14 @@
             <p class="mg-bottom helper">
               {{ $t("settings.bridges_description") }}
             </p>
-            <div class="bridges mg-bottom">
-              <cv-checkbox
-                v-for="bridge in availableBridges"
-                :key="bridge.id"
-                :id="'bridge-' + bridge.id"
-                :value="bridge.id"
-                :label="bridge.name"
-                v-model="bridgeEnabled[bridge.id]"
-                :disabled="busy"
-              />
-            </div>
-            <NsInlineNotification
-              v-if="error.bridges"
-              kind="error"
-              :title="$t('settings.' + error.bridges)"
-              :showCloseButton="false"
-            />
-            <template v-if="bridgeEnabled.telegram">
-              <p class="mg-bottom helper">
-                {{ $t("settings.telegram_description") }}
-              </p>
-              <cv-text-input
-                id="telegram-api-id"
-                :label="$t('settings.telegram_api_id')"
-                v-model.trim="telegramApiId"
-                class="mg-bottom"
-                :invalid-message="$t(error.telegram_api_id)"
-                :disabled="busy"
-                ref="telegram_api_id"
-              />
-              <cv-text-input
-                id="telegram-api-hash"
-                :label="$t('settings.telegram_api_hash')"
-                :helper-text="
-                  telegramApiHashSet ? $t('settings.telegram_api_hash_set') : ''
-                "
-                v-model.trim="telegramApiHash"
-                type="password"
-                autocomplete="off"
-                class="mg-bottom"
-                :invalid-message="$t(error.telegram_api_hash)"
-                :disabled="busy"
-                ref="telegram_api_hash"
-              />
-            </template>
+            <ul v-if="appservices.length" id="appservices" class="mg-bottom">
+              <li v-for="item in appservices" :key="item.id">
+                <strong>{{ item.id }}</strong> ({{ item.module }})
+              </li>
+            </ul>
+            <p v-else class="mg-bottom helper">
+              {{ $t("settings.no_bridges") }}
+            </p>
             <!-- calls -->
             <h4 class="mg-top mg-bottom-sm">
               {{ $t("settings.calls_title") }}
@@ -333,6 +296,81 @@
                 <code id="calls-ports">{{ callsPorts.join(", ") }}</code>
               </div>
             </template>
+            <!-- moderation and maintenance -->
+            <h4 class="mg-top mg-bottom-sm">
+              {{ $t("settings.maintenance_title") }}
+            </h4>
+            <cv-toggle
+              id="draupnir"
+              value="draupnir"
+              :label="$t('settings.draupnir')"
+              v-model="draupnir"
+              :disabled="busy"
+              class="mg-bottom-sm"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <p class="mg-bottom helper">
+              {{ $t("settings.draupnir_helper") }}
+            </p>
+            <cv-text-input
+              v-if="draupnirManagementRoom"
+              id="draupnir-management-room"
+              :label="$t('settings.draupnir_management_room')"
+              :value="draupnirManagementRoom"
+              readonly
+              class="mg-bottom"
+            />
+            <cv-toggle
+              id="state-compressor"
+              value="stateCompressor"
+              :label="$t('settings.state_compressor')"
+              v-model="stateCompressor"
+              :disabled="busy"
+              class="mg-bottom-sm"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <p class="mg-bottom helper">
+              {{ $t("settings.state_compressor_helper") }}
+            </p>
+            <cv-toggle
+              id="shared-secret-auth"
+              value="sharedSecretAuth"
+              :label="$t('settings.shared_secret_auth')"
+              v-model="sharedSecretAuth"
+              :disabled="busy"
+              class="mg-bottom-sm"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <p class="mg-bottom helper">
+              {{ $t("settings.shared_secret_auth_helper") }}
+            </p>
+            <cv-text-input
+              v-if="sharedSecretAuthSecret"
+              id="shared-secret-auth-secret"
+              :label="$t('settings.shared_secret_auth_secret')"
+              :value="sharedSecretAuthSecret"
+              type="password"
+              readonly
+              class="mg-bottom"
+            />
             <!-- advanced -->
             <cv-accordion class="mg-bottom">
               <cv-accordion-item :open="toggleAccordion[0]">
@@ -428,15 +466,16 @@ export default {
       userDomain: "",
       userDomains: [],
       appHosts: { element: "", cinny: "", ketesa: "" },
-      availableBridges: [],
-      bridgeEnabled: {},
-      telegramApiId: "",
-      telegramApiHash: "",
-      telegramApiHashSet: false,
+      appservices: [],
       turn: false,
       elementCall: false,
       callsPublicIp: "",
       callsPorts: [],
+      draupnir: false,
+      draupnirManagementRoom: "",
+      stateCompressor: true,
+      sharedSecretAuth: false,
+      sharedSecretAuthSecret: "",
       mailFrom: "",
       maxUploadMb: 100,
       toggleAccordion: [false],
@@ -460,8 +499,6 @@ export default {
         cinny_host: "",
         ketesa_host: "",
         bridges: "",
-        telegram_api_id: "",
-        telegram_api_hash: "",
         mail_from: "",
         calls_public_ip: "",
         max_upload_mb: "",
@@ -570,15 +607,12 @@ export default {
         cinny: config.cinny_host,
         ketesa: config.ketesa_host,
       };
-      this.availableBridges = config.available_bridges;
-      const enabled = {};
-      for (const bridge of config.available_bridges) {
-        enabled[bridge.id] = config.bridges.includes(bridge.id);
-      }
-      this.bridgeEnabled = enabled;
-      this.telegramApiId = config.telegram_api_id;
-      this.telegramApiHash = "";
-      this.telegramApiHashSet = config.telegram_api_hash_set;
+      this.appservices = config.appservices;
+      this.draupnir = config.draupnir;
+      this.draupnirManagementRoom = config.draupnir_management_room;
+      this.stateCompressor = config.state_compressor;
+      this.sharedSecretAuth = config.shared_secret_auth;
+      this.sharedSecretAuthSecret = config.shared_secret_auth_secret;
       this.turn = config.turn;
       this.elementCall = config.element_call;
       this.callsPublicIp = config.calls_public_ip;
@@ -607,14 +641,6 @@ export default {
       };
       if (!this.host) {
         invalid("host", "common.required");
-      }
-      if (this.bridgeEnabled.telegram) {
-        if (!this.telegramApiId) {
-          invalid("telegram_api_id", "common.required");
-        }
-        if (!this.telegramApiHash && !this.telegramApiHashSet) {
-          invalid("telegram_api_hash", "common.required");
-        }
       }
       if (firstInvalid) {
         this.$nextTick(() => this.focusElement(firstInvalid));
@@ -653,14 +679,12 @@ export default {
         element_host: this.appHosts.element,
         cinny_host: this.appHosts.cinny,
         ketesa_host: this.appHosts.ketesa,
-        bridges: this.availableBridges
-          .map((bridge) => bridge.id)
-          .filter((id) => this.bridgeEnabled[id]),
-        telegram_api_id: this.telegramApiId,
-        telegram_api_hash: this.telegramApiHash,
         turn: this.turn,
         element_call: this.elementCall,
         calls_public_ip: this.callsPublicIp,
+        draupnir: this.draupnir,
+        state_compressor: this.stateCompressor,
+        shared_secret_auth: this.sharedSecretAuth,
         mail_from: this.mailFrom,
         max_upload_mb: parseInt(this.maxUploadMb, 10),
       };
@@ -724,9 +748,8 @@ export default {
   gap: $spacing-05;
 }
 
-.bridges {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
-  gap: $spacing-03;
+#appservices {
+  list-style: disc;
+  padding-left: $spacing-06;
 }
 </style>

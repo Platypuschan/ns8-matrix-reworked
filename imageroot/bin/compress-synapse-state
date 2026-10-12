@@ -1,0 +1,35 @@
+#!/bin/bash
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Run one pass of synapse_auto_compressor against the Synapse database.
+
+set -euo pipefail
+exec 1>&2
+
+# Remove compressor bookkeeping of rooms and state groups that Synapse
+# deleted meanwhile (purged rooms); the compressor fails on them otherwise.
+# The tables exist only after the first run.
+podman exec -i postgresql psql -q -U postgres -d synapse <<'SQL' || true
+BEGIN;
+DELETE FROM state_compressor_state AS scs
+WHERE NOT EXISTS (SELECT * FROM rooms AS r WHERE r.room_id = scs.room_id);
+DELETE FROM state_compressor_state AS scs
+WHERE scs.room_id IN (
+    SELECT DISTINCT room_id FROM state_compressor_state AS scs2
+    WHERE scs2.current_head IS NOT NULL
+      AND NOT EXISTS (SELECT * FROM state_groups AS sg WHERE sg.id = scs2.current_head));
+DELETE FROM state_compressor_progress AS scp
+WHERE NOT EXISTS (SELECT * FROM state_compressor_state AS scs WHERE scs.room_id = scp.room_id);
+COMMIT;
+SQL
+
+# 500 state groups per chunk, 100 chunks per run (the upstream defaults
+# used by matrix-docker-ansible-deploy)
+podman run --rm --network=host \
+    --env-file=compressor.env \
+    --entrypoint /bin/sh \
+    "${RUST_SYNAPSE_TOOLS_IMAGE}" \
+    -c 'exec synapse_auto_compressor -p "$POSTGRES_LOCATION" -c 500 -n 100'
