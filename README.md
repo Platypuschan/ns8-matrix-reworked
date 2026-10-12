@@ -8,9 +8,8 @@ A [NethServer 8](https://github.com/NethServer/ns8-core) module for a complete
   or local accounts only
 - web apps, each on its own host name and optional: **Element Web**, **Cinny**
   and the **Ketesa** Synapse admin UI (formerly synapse-admin)
-- **mautrix bridges**, each enabled with one switch: WhatsApp, Signal, Telegram,
-  Messenger/Instagram, Google Messages, Slack, Discord, Bluesky, X (Twitter) and
-  LinkedIn, with double puppeting and end-to-bridge encryption allowed
+- **mautrix bridges**, each enabled with one switch: WhatsApp, Signal, Telegram
+  and Discord, with double puppeting and end-to-bridge encryption allowed
 - **calls**: **Element Call** (MatrixRTC with a LiveKit media server, embedded in
   Element Web) and a **coturn** TURN server for classic 1:1 calls and LiveKit
 - **server name delegation** (user IDs `@alice:example.org` with the homeserver
@@ -52,7 +51,7 @@ Open the module in the cluster admin UI, or use `configure-module`:
 | `user_domain` | NS8 user domain whose users log in with their password. Empty: local accounts only. |
 | `federation` | Talk to other Matrix servers. |
 | `element_host`, `cinny_host`, `ketesa_host` | Host name of each web app; empty disables it. |
-| `bridges` | Enabled bridges: `whatsapp`, `signal`, `telegram`, `meta`, `gmessages`, `slack`, `discord`, `bluesky`, `twitter`, `linkedin`. |
+| `bridges` | Enabled bridges: `whatsapp`, `signal`, `telegram`, `discord`. |
 | `telegram_api_id`, `telegram_api_hash` | Required for the Telegram bridge, from <https://my.telegram.org/apps>. An empty hash keeps the stored one. |
 | `mail_from` | Sender of notification mails (default `noreply@<server_name>`). |
 | `max_upload_mb` | Maximum upload size, default 100. |
@@ -78,9 +77,7 @@ in Ketesa).
 ### Bridges
 
 All users of the server can use the enabled bridges: start a chat with the bridge
-bot (`@whatsappbot`, `@signalbot`, `@telegrambot`, `@facebookbot` for
-Messenger/Instagram, `@gmessagesbot`, `@slackbot`, `@discordbot`,
-`@blueskybot`, `@twitterbot`, `@linkedinbot`) and send `login`. The admin
+bot (`@whatsappbot`, `@signalbot`, `@telegrambot`, `@discordbot`) and send `login`. The admin
 account has bridge admin rights.
 
 A bridge image is pulled the first time the bridge is enabled. Each bridge keeps
@@ -90,6 +87,11 @@ permission and logging there; other options can be edited in that file and
 are kept (restart the bridge with `runagent -m <module> systemctl --user restart bridge@<bridge>`).
 Disabling a bridge stops it and removes it from Synapse; its configuration and
 database are kept for a later re-enable.
+
+Releases before 0.3.0 also had bridges for Messenger/Instagram, Google
+Messages, Slack, Bluesky, X and LinkedIn. An update stops them and removes
+them from Synapse; their `state/bridges/<bridge>` directory and
+`mautrix_<bridge>` database are kept.
 
 ### Calls
 
