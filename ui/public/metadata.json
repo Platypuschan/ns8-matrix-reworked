@@ -1,8 +1,8 @@
 {
   "name": "matrix-reworked",
   "description": {
-    "en": "Matrix homeserver (Synapse) with Element Web, Cinny, the Ketesa admin UI, Element Call with LiveKit, a coturn TURN server and mautrix bridges for WhatsApp, Signal, Telegram and Discord.",
-    "de": "Matrix-Homeserver (Synapse) mit Element Web, Cinny, der Ketesa-Verwaltung, Element Call mit LiveKit, einem coturn-TURN-Server und mautrix-Bridges für WhatsApp, Signal, Telegram und Discord."
+    "en": "Matrix homeserver (Synapse) with Element Web, Cinny, the Ketesa admin UI, Element Call with LiveKit, coturn, bridges for WhatsApp, Signal, Telegram, Discord, Steam and IRC, and the Draupnir moderation bot.",
+    "de": "Matrix-Homeserver (Synapse) mit Element Web, Cinny, der Ketesa-Verwaltung, Element Call mit LiveKit, coturn, Bridges für WhatsApp, Signal, Telegram, Discord, Steam und IRC sowie dem Moderationsbot Draupnir."
   },
   "categories": [
     "collaboration"

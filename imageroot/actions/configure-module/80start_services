@@ -65,3 +65,18 @@ done
 
 # The admin account needs a running Synapse
 ensure-admin
+
+# Draupnir needs its account and management room first
+if [[ "$(python3 -c 'import json; print(json.load(open("matrix.json")).get("draupnir", False))')" == True ]]; then
+    provision-draupnir
+    start_or_restart draupnir.service restart-needed-draupnir
+else
+    systemctl --user disable --now draupnir.service
+    rm -f restart-needed-draupnir
+fi
+
+if [[ "$(python3 -c 'import json; print(json.load(open("matrix.json")).get("state_compressor", True))')" == True ]]; then
+    systemctl --user enable --now synapse-compressor.timer
+else
+    systemctl --user disable --now synapse-compressor.timer
+fi

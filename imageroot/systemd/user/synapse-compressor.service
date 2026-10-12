@@ -1,0 +1,21 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# synapse_auto_compressor: compresses the state_groups_state table of the
+# Synapse database in chunks, while Synapse keeps running. Started by
+# synapse-compressor.timer.
+#
+
+[Unit]
+Description=Compress the Synapse room state tables
+Requires=postgresql.service
+After=postgresql.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%E/state/environment
+WorkingDirectory=%E/state
+ExecStart=runagent compress-synapse-state
+SyslogIdentifier=%u

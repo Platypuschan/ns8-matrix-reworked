@@ -249,6 +249,18 @@
               :title="$t('settings.' + error.bridges)"
               :showCloseButton="false"
             />
+            <cv-text-input
+              v-if="bridgeEnabled.heisenbridge"
+              id="heisenbridge-owner"
+              :label="$t('settings.heisenbridge_owner')"
+              :helper-text="$t('settings.heisenbridge_owner_helper')"
+              placeholder="@alice:example.org"
+              v-model.trim="heisenbridgeOwner"
+              class="mg-bottom"
+              :invalid-message="$t(error.heisenbridge_owner)"
+              :disabled="busy"
+              ref="heisenbridge_owner"
+            />
             <template v-if="bridgeEnabled.telegram">
               <p class="mg-bottom helper">
                 {{ $t("settings.telegram_description") }}
@@ -333,6 +345,81 @@
                 <code id="calls-ports">{{ callsPorts.join(", ") }}</code>
               </div>
             </template>
+            <!-- moderation and maintenance -->
+            <h4 class="mg-top mg-bottom-sm">
+              {{ $t("settings.maintenance_title") }}
+            </h4>
+            <cv-toggle
+              id="draupnir"
+              value="draupnir"
+              :label="$t('settings.draupnir')"
+              v-model="draupnir"
+              :disabled="busy"
+              class="mg-bottom-sm"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <p class="mg-bottom helper">
+              {{ $t("settings.draupnir_helper") }}
+            </p>
+            <cv-text-input
+              v-if="draupnirManagementRoom"
+              id="draupnir-management-room"
+              :label="$t('settings.draupnir_management_room')"
+              :value="draupnirManagementRoom"
+              readonly
+              class="mg-bottom"
+            />
+            <cv-toggle
+              id="state-compressor"
+              value="stateCompressor"
+              :label="$t('settings.state_compressor')"
+              v-model="stateCompressor"
+              :disabled="busy"
+              class="mg-bottom-sm"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <p class="mg-bottom helper">
+              {{ $t("settings.state_compressor_helper") }}
+            </p>
+            <cv-toggle
+              id="shared-secret-auth"
+              value="sharedSecretAuth"
+              :label="$t('settings.shared_secret_auth')"
+              v-model="sharedSecretAuth"
+              :disabled="busy"
+              class="mg-bottom-sm"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <p class="mg-bottom helper">
+              {{ $t("settings.shared_secret_auth_helper") }}
+            </p>
+            <cv-text-input
+              v-if="sharedSecretAuthSecret"
+              id="shared-secret-auth-secret"
+              :label="$t('settings.shared_secret_auth_secret')"
+              :value="sharedSecretAuthSecret"
+              type="password"
+              readonly
+              class="mg-bottom"
+            />
             <!-- advanced -->
             <cv-accordion class="mg-bottom">
               <cv-accordion-item :open="toggleAccordion[0]">
@@ -437,6 +524,12 @@ export default {
       elementCall: false,
       callsPublicIp: "",
       callsPorts: [],
+      heisenbridgeOwner: "",
+      draupnir: false,
+      draupnirManagementRoom: "",
+      stateCompressor: true,
+      sharedSecretAuth: false,
+      sharedSecretAuthSecret: "",
       mailFrom: "",
       maxUploadMb: 100,
       toggleAccordion: [false],
@@ -464,6 +557,7 @@ export default {
         telegram_api_hash: "",
         mail_from: "",
         calls_public_ip: "",
+        heisenbridge_owner: "",
         max_upload_mb: "",
       },
     };
@@ -579,6 +673,12 @@ export default {
       this.telegramApiId = config.telegram_api_id;
       this.telegramApiHash = "";
       this.telegramApiHashSet = config.telegram_api_hash_set;
+      this.heisenbridgeOwner = config.heisenbridge_owner;
+      this.draupnir = config.draupnir;
+      this.draupnirManagementRoom = config.draupnir_management_room;
+      this.stateCompressor = config.state_compressor;
+      this.sharedSecretAuth = config.shared_secret_auth;
+      this.sharedSecretAuthSecret = config.shared_secret_auth_secret;
       this.turn = config.turn;
       this.elementCall = config.element_call;
       this.callsPublicIp = config.calls_public_ip;
@@ -661,6 +761,10 @@ export default {
         turn: this.turn,
         element_call: this.elementCall,
         calls_public_ip: this.callsPublicIp,
+        heisenbridge_owner: this.heisenbridgeOwner,
+        draupnir: this.draupnir,
+        state_compressor: this.stateCompressor,
+        shared_secret_auth: this.sharedSecretAuth,
         mail_from: this.mailFrom,
         max_upload_mb: parseInt(this.maxUploadMb, 10),
       };

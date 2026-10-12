@@ -3,16 +3,19 @@
 #
 
 #
-# mautrix bridge %i. state/bridges/%i holds its configuration, which the
-# bridge completes and updates itself; unit.env names the image. The image
-# entrypoint (docker-run.sh) is not used: it would switch to UID 1337, whose
-# files the module agent cannot read. The bridge runs as root of the rootless
-# container, i.e. as the module user, in the host network namespace to reach
-# Synapse and PostgreSQL on 127.0.0.1.
+# Bridge %i. state/bridges/%i holds its configuration (mautrix bridges
+# complete and update it themselves) and registration; unit.env names the
+# image, binary, arguments and network (see bridge_unit_env() in
+# matrix_setup.py). The image entrypoints are not used: they would switch to
+# an unprivileged UID whose files the module agent cannot read. The bridge
+# runs as root of the rootless container, i.e. as the module user. Most
+# bridges share the host network namespace to reach Synapse and PostgreSQL
+# on 127.0.0.1; an isolated bridge gets its own namespace with the host
+# loopback mapped in.
 #
 
 [Unit]
-Description=mautrix-%i Matrix bridge
+Description=Matrix bridge %i
 Requires=postgresql.service
 Wants=synapse.service
 After=postgresql.service synapse.service
@@ -32,12 +35,13 @@ ExecStartPre=runagent ensure-bridge-database ${BRIDGE_DATABASE}
 ExecStart=/usr/bin/podman run --conmon-pidfile %t/bridge-%i.pid \
     --cidfile %t/bridge-%i.ctr-id --cgroups=no-conmon \
     --replace -d --name bridge-%i \
-    --network=host \
+    $BRIDGE_NET \
+    --user=0:0 \
     --volume %E/state/bridges/%i:/data:Z \
     --workdir /data \
     --entrypoint ${BRIDGE_BINARY} \
     ${BRIDGE_IMAGE} \
-    -c /data/config.yaml -r /data/registration.yaml
+    $BRIDGE_ARGS
 ExecStop=/usr/bin/podman stop --ignore --cidfile %t/bridge-%i.ctr-id -t 30
 ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/bridge-%i.ctr-id
 SyslogIdentifier=%u

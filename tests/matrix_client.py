@@ -12,6 +12,8 @@ failed; the reason is on stderr.
 """
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -107,6 +109,13 @@ def main():
     p = sub.add_parser("stun")
     p.add_argument("port", type=int)
     sub.add_parser("sfu-token")
+    p = sub.add_parser("ssa-login")
+    p.add_argument("user_id")
+    p.add_argument("secret")
+    p = sub.add_parser("room-command")
+    p.add_argument("room")
+    p.add_argument("bot")
+    p.add_argument("body")
     p = sub.add_parser("server-admin")
     p.add_argument("user_id")
     args = parser.parse_args()
@@ -177,6 +186,28 @@ def main():
         if not isinstance(answer, dict) or not answer.get("jwt"):
             raise SystemExit(f"no LiveKit token: {answer}")
         result = {"url": answer.get("url"), "jwt_parts": len(answer["jwt"].split("."))}
+    elif args.command == "ssa-login":
+        # matrix-synapse-shared-secret-auth: token = HMAC-SHA512(secret, user ID)
+        token = hmac.new(args.secret.encode(), args.user_id.encode(), hashlib.sha512).hexdigest()
+        answer = client.call("POST", "/login", {
+            "type": "com.devture.shared_secret_auth",
+            "identifier": {"type": "m.id.user", "user": args.user_id},
+            "token": token,
+        }, expect=(200, 403))
+        if "access_token" not in answer:
+            raise SystemExit(f"shared-secret login failed: {answer}")
+        result = {"user_id": answer["user_id"]}
+    elif args.command == "room-command":
+        quoted = urllib.parse.quote(args.room)
+        client.call("POST", f"/rooms/{quoted}/join", {})
+        client.call("PUT", f"/rooms/{quoted}/send/m.room.message/t{time.time_ns()}",
+                    {"msgtype": "m.text", "body": args.body})
+        reply = wait(
+            lambda: next((e["content"].get("body") for e in messages(client, args.room)
+                          if e["sender"] == args.bot and e["type"] == "m.room.message"), None),
+            120, f"a message from {args.bot}",
+        )
+        result = {"reply": reply[:300]}
     elif args.command == "whoami":
         result = client.call("GET", "/account/whoami")
     elif args.command == "server-admin":

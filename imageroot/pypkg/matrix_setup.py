@@ -58,10 +58,10 @@ PORT_NAMES = [
     "whatsapp",
     "signal",
     "telegram",
-    # Ports of bridges removed in 0.3.0 stay reserved: the positions of the
-    # services after them must not change
-    "reserved_meta",
-    "reserved_gmessages",
+    # Ports of bridges removed in 0.3.0 stay reserved (or were reused for
+    # new bridges): the positions of the services after them must not change
+    "steam",
+    "heisenbridge",
     "reserved_slack",
     "discord",
     "reserved_bluesky",
@@ -94,7 +94,31 @@ BRIDGES = {
     "signal": {"name": "Signal", "image": "dock.mau.dev/mautrix/signal:v0.2609.0"},
     "telegram": {"name": "Telegram", "image": "dock.mau.dev/mautrix/telegram:v0.2609.0"},
     "discord": {"name": "Discord", "image": "dock.mau.dev/mautrix/discord:v0.7.7", "legacy": True},
+    # mautrix-go bridgev2 based. Its SteamKit helper always listens on
+    # 0.0.0.0:50051 without authentication, so the bridge runs in its own
+    # network namespace ("isolated"), see bridge_unit_env().
+    "steam": {
+        "name": "Steam",
+        "image": "ghcr.io/jasonlaguidice/matrix-steam-bridge:1.3.1",
+        "binary": "/app/steam",
+        "isolated": True,
+    },
+    # Bouncer-style IRC bridge: every user connects to the IRC networks of
+    # their choice through the bot. It keeps its state in Matrix account
+    # data; the module writes its registration.
+    "heisenbridge": {
+        "name": "IRC (Heisenbridge)",
+        "image": "docker.io/hif1/heisenbridge:1.15.4",
+        "kind": "heisenbridge",
+    },
 }
+
+# Address of the host's loopback inside the network namespace of an
+# isolated bridge (pasta --map-host-loopback)
+HOST_LOOPBACK = "169.254.1.3"
+DRAUPNIR_LOCALPART = "draupnir"
+HEISENBRIDGE_LOCALPART = "heisenbridge"
+SHARED_SECRET_MODULES = "/modules"
 
 # Bridges of earlier releases. Stored settings that still list them (also
 # from a backup) drop them silently; their configuration and database stay.
@@ -195,6 +219,10 @@ DEFAULTS = {
     "turn": False,
     "element_call": False,
     "calls_public_ip": "",
+    "heisenbridge_owner": "",
+    "draupnir": False,
+    "state_compressor": True,
+    "shared_secret_auth": False,
 }
 
 SECRET_KEYS = (
@@ -208,7 +236,13 @@ SECRET_KEYS = (
     "turn_shared_secret",
     "livekit_key",
     "livekit_secret",
+    "heisenbridge_as_token",
+    "heisenbridge_hs_token",
+    "draupnir_password",
+    "shared_secret_auth_secret",
 )
+
+MXID_PATTERN = re.compile(r"^@[a-z0-9._=/+-]+:[A-Za-z0-9.-]+(:[0-9]{1,5})?$")
 
 
 def ensure_settings(state_dir="."):
@@ -332,7 +366,12 @@ def apply_request(data, state_dir=".", write=True):
             raise SettingsError("calls_public_ip", new["calls_public_ip"], "invalid_ip_address")
         new["calls_public_ip"] = str(address)
 
-    for key in ("lets_encrypt", "http2https", "federation", "wellknown_on_server_name", "turn", "element_call"):
+    new["heisenbridge_owner"] = str(new["heisenbridge_owner"] or "").strip()
+    if new["heisenbridge_owner"] and not MXID_PATTERN.fullmatch(new["heisenbridge_owner"]):
+        raise SettingsError("heisenbridge_owner", new["heisenbridge_owner"], "invalid_user_id")
+
+    for key in ("lets_encrypt", "http2https", "federation", "wellknown_on_server_name", "turn", "element_call",
+                "draupnir", "state_compressor", "shared_secret_auth"):
         new[key] = bool(new[key])
     new["user_domain"] = (new["user_domain"] or "").strip()
 
@@ -386,9 +425,9 @@ def regex_quote(text):
     return re.escape(text)
 
 
-def database_uri(settings, port_map, database):
+def database_uri(settings, port_map, database, host="127.0.0.1"):
     password = settings["secrets"]["postgres_password"]
-    return f"postgres://postgres:{password}@127.0.0.1:{port_map['postgres']}/{database}?sslmode=disable"
+    return f"postgres://postgres:{password}@{host}:{port_map['postgres']}/{database}?sslmode=disable"
 
 
 def bridge_database(key):
@@ -424,6 +463,19 @@ def ldap_module(ldap):
     if user_filter:
         config["filter"] = user_filter
     return {"module": "ldap_auth_provider.LdapAuthProviderModule", "config": config}
+
+
+def shared_secret_module(settings):
+    """matrix-synapse-shared-secret-auth: lets trusted tools log in as any
+    local user with a token derived from the shared secret."""
+    return {
+        "module": "shared_secret_authenticator.SharedSecretAuthProvider",
+        "config": {
+            "shared_secret": settings["secrets"]["shared_secret_auth_secret"],
+            "m_login_password_support_enabled": True,
+            "com_devture_shared_secret_auth_support_enabled": True,
+        },
+    }
 
 
 def email_section(settings, smarthost):
@@ -591,8 +643,13 @@ def homeserver_config(settings, port_map, ldap=None, smarthost=None, udp_map=Non
     else:
         config["federation_domain_whitelist"] = []
         config["trusted_key_servers"] = []
+    modules = []
     if ldap:
-        config["modules"] = [ldap_module(ldap)]
+        modules.append(ldap_module(ldap))
+    if settings.get("shared_secret_auth"):
+        modules.append(shared_secret_module(settings))
+    if modules:
+        config["modules"] = modules
     email = email_section(settings, smarthost)
     if email:
         config["email"] = email
@@ -831,17 +888,21 @@ def bridge_settings(key, settings, port_map):
     """The (path, value) pairs of a bridge configuration owned by the module."""
     server_name = settings["server_name"]
     legacy = BRIDGES[key].get("legacy", False)
-    database = {"type": "postgres", "uri": database_uri(settings, port_map, bridge_database(key))}
+    isolated = BRIDGES[key].get("isolated", False)
+    # An isolated bridge reaches Synapse and PostgreSQL through the mapped
+    # host loopback and listens on all addresses of its own namespace
+    local = HOST_LOOPBACK if isolated else "127.0.0.1"
+    database = {"type": "postgres", "uri": database_uri(settings, port_map, bridge_database(key), local)}
     permissions = {
         server_name: "user",
         user_id(ADMIN_LOCALPART, server_name): "admin",
     }
     double_puppet = {server_name: "as_token:" + settings["secrets"]["doublepuppet_as_token"]}
     values = [
-        (("homeserver", "address"), f"http://127.0.0.1:{port_map['synapse']}"),
+        (("homeserver", "address"), f"http://{local}:{port_map['synapse']}"),
         (("homeserver", "domain"), server_name),
         (("appservice", "address"), f"http://127.0.0.1:{port_map[key]}"),
-        (("appservice", "hostname"), "127.0.0.1"),
+        (("appservice", "hostname"), "0.0.0.0" if isolated else "127.0.0.1"),
         (("appservice", "port"), port_map[key]),
         (("bridge", "permissions"), permissions),
         # The journal adds time stamps; no log files in the volume
@@ -866,6 +927,13 @@ def bridge_settings(key, settings, port_map):
             (("encryption", "allow"), True),
             (("matrix", "federate_rooms"), settings["federation"]),
         ]
+    if key == "steam":
+        values += [
+            # The image keeps the SteamKit helper next to the bridge
+            (("network", "steam_bridge_path"), "/app"),
+            (("network", "steam_bridge_address"), "localhost:50051"),
+            (("network", "steam_bridge_auto_start"), True),
+        ]
     if key == "telegram":
         values += [
             (("network", "api_id"), int(settings["telegram_api_id"])),
@@ -889,13 +957,83 @@ def patch_registration(document, key, port_map):
     return document
 
 
-def bridge_unit_env(key):
-    image = BRIDGES[key]["image"]
+def heisenbridge_registration(settings, port_map):
+    stored = settings["secrets"]
     return {
-        "BRIDGE_IMAGE": image,
-        "BRIDGE_BINARY": f"/usr/bin/mautrix-{key}",
-        "BRIDGE_DATABASE": bridge_database(key),
+        "id": "heisenbridge",
+        "url": f"http://127.0.0.1:{port_map['heisenbridge']}",
+        "as_token": stored["heisenbridge_as_token"],
+        "hs_token": stored["heisenbridge_hs_token"],
+        "rate_limited": False,
+        "sender_localpart": HEISENBRIDGE_LOCALPART,
+        # Heisenbridge derives the puppet prefix from this exact form
+        "namespaces": {"users": [{"regex": "@hbirc_.*", "exclusive": True}], "aliases": [], "rooms": []},
     }
+
+
+def bridge_unit_env(key, settings=None, port_map=None):
+    """Variables of bridge@<key>.service. $BRIDGE_NET and $BRIDGE_ARGS are
+    split into words by systemd."""
+    info = BRIDGES[key]
+    env = {"BRIDGE_IMAGE": info["image"]}
+    if info.get("kind") == "heisenbridge":
+        owner = (settings or {}).get("heisenbridge_owner")
+        args = ["-c", "/data/registration.yaml", "-l", "127.0.0.1", "-p", str(port_map["heisenbridge"])]
+        if owner:
+            args += ["-o", owner]
+        args.append(f"http://127.0.0.1:{port_map['synapse']}")
+        env.update({
+            "BRIDGE_BINARY": "heisenbridge",
+            "BRIDGE_ARGS": " ".join(args),
+            "BRIDGE_NET": "--network=host",
+            "BRIDGE_DATABASE": "none",
+        })
+        return env
+    env.update({
+        "BRIDGE_BINARY": info.get("binary", f"/usr/bin/mautrix-{key}"),
+        "BRIDGE_ARGS": "-c /data/config.yaml -r /data/registration.yaml",
+        "BRIDGE_DATABASE": bridge_database(key),
+    })
+    if info.get("isolated"):
+        port = port_map[key]
+        env["BRIDGE_NET"] = f"--network=pasta:--map-host-loopback,{HOST_LOOPBACK} --publish=127.0.0.1:{port}:{port}"
+    else:
+        env["BRIDGE_NET"] = "--network=host"
+    return env
+
+
+# --- Draupnir and maintenance ------------------------------------------------
+
+DRAUPNIR_DIR = "draupnir"
+
+
+def draupnir_config(settings, port_map, access_token, management_room):
+    homeserver = f"http://127.0.0.1:{port_map['synapse']}"
+    return {
+        "homeserverUrl": homeserver,
+        "rawHomeserverUrl": homeserver,
+        "accessToken": access_token,
+        "pantalaimon": {"use": False},
+        "experimentalRustCrypto": False,
+        "dataPath": "/data",
+        # Only the managers in the management room can invite the bot
+        "autojoinOnlyIfManager": True,
+        "recordIgnoredInvites": False,
+        "managementRoom": management_room,
+        "logLevel": "INFO",
+        "verifyPermissionsOnStartup": True,
+        "noop": False,
+        "protectAllJoinedRooms": False,
+        "backgroundDelayMS": 500,
+        "admin": {"enableMakeRoomAdminCommand": False},
+        "commands": {"allowNoPrefix": False, "symbolPrefixes": ["!"], "additionalPrefixes": ["draupnir"]},
+        "web": {"enabled": False},
+    }
+
+
+def compressor_env(settings, port_map):
+    password = settings["secrets"]["postgres_password"]
+    return {"POSTGRES_LOCATION": f"postgresql://postgres:{password}@127.0.0.1:{port_map['postgres']}/synapse"}
 
 
 # --- Output --------------------------------------------------------------------
@@ -912,7 +1050,7 @@ def urls(settings):
     }
 
 
-def configuration(settings, domains, admin_ready, port_map=None, udp_map=None):
+def configuration(settings, domains, admin_ready, port_map=None, udp_map=None, draupnir_room=""):
     """Output of get-configuration."""
     result = {key: settings.get(key, value) for key, value in DEFAULTS.items() if key != "telegram_api_hash"}
     result["telegram_api_hash_set"] = bool(settings.get("telegram_api_hash"))
@@ -924,6 +1062,10 @@ def configuration(settings, domains, admin_ready, port_map=None, udp_map=None):
     documents = wellknown_documents(settings) if settings.get("host") and delegated(settings) else {}
     result["wellknown_server"] = json.dumps(documents["server"]) if documents else ""
     result["wellknown_client"] = json.dumps(documents["client"]) if documents else ""
+    result["draupnir_management_room"] = draupnir_room if settings.get("draupnir") else ""
+    result["shared_secret_auth_secret"] = (
+        settings.get("secrets", {}).get("shared_secret_auth_secret", "") if settings.get("shared_secret_auth") else ""
+    )
     result["calls_ports"] = firewall_ports(settings, port_map, udp_map) if port_map and udp_map else []
     result["admin_user"] = user_id(ADMIN_LOCALPART, settings["server_name"]) if settings.get("server_name") else ""
     result["admin_password"] = settings.get("secrets", {}).get("admin_password", "") if admin_ready else ""

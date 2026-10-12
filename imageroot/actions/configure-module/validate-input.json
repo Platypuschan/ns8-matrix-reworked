@@ -25,13 +25,17 @@
             "bridges": [
                 "whatsapp",
                 "signal",
-                "telegram"
+                "heisenbridge"
             ],
             "telegram_api_id": "12345",
             "telegram_api_hash": "0123456789abcdef0123456789abcdef",
             "turn": true,
             "element_call": true,
-            "calls_public_ip": ""
+            "calls_public_ip": "",
+            "heisenbridge_owner": "",
+            "draupnir": true,
+            "state_compressor": true,
+            "shared_secret_auth": false
         }
     ],
     "type": "object",
@@ -106,7 +110,9 @@
                     "whatsapp",
                     "signal",
                     "telegram",
-                    "discord"
+                    "discord",
+                    "steam",
+                    "heisenbridge"
                 ]
             },
             "uniqueItems": true
@@ -133,6 +139,23 @@
             "type": "string",
             "description": "Public IP address of the node for TURN and LiveKit media; empty: coturn uses the node addresses, LiveKit asks a STUN server",
             "maxLength": 45
+        },
+        "heisenbridge_owner": {
+            "type": "string",
+            "description": "Matrix ID that owns Heisenbridge (IRC); empty: the first local user who talks to it",
+            "maxLength": 255
+        },
+        "draupnir": {
+            "type": "boolean",
+            "description": "Run the Draupnir moderation bot with a management room for the module admin"
+        },
+        "state_compressor": {
+            "type": "boolean",
+            "description": "Compress the Synapse room state tables every night (synapse_auto_compressor)"
+        },
+        "shared_secret_auth": {
+            "type": "boolean",
+            "description": "Load matrix-synapse-shared-secret-auth: trusted tools log in as any local user with a token derived from the shared secret"
         }
     }
 }

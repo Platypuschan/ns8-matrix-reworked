@@ -42,6 +42,8 @@ if settings.get("turn"):
     units.append("coturn.service")
 if settings.get("element_call"):
     units += ["livekit.service", "lk-jwt.service"]
+if settings.get("draupnir"):
+    units.append("draupnir.service")
 units += [f"bridge@{key}.service" for key in settings["bridges"]]
 for unit in units:
     subprocess.run(["systemctl", "--user", "try-restart", unit], check=True)

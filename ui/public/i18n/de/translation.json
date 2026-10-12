@@ -80,7 +80,19 @@
     "calls_public_ip": "Öffentliche IP-Adresse (optional)",
     "calls_public_ip_helper": "Die Adresse, unter der Clients im Internet diesen Knoten erreichen, falls er hinter NAT steht. Leer: LiveKit ermittelt sie per STUN, coturn nennt die eigenen Adressen des Knotens.",
     "calls_ports_description": "Diese Ports öffnen bzw. an den Knoten weiterleiten:",
-    "invalid_ip_address": "Muss eine öffentliche IPv4- oder IPv6-Adresse sein"
+    "invalid_ip_address": "Muss eine öffentliche IPv4- oder IPv6-Adresse sein",
+    "heisenbridge_owner": "Heisenbridge-Besitzer (optional)",
+    "heisenbridge_owner_helper": "Matrix-ID, die die IRC-Bridge verwaltet, z. B. @alice:example.org. Leer: Der erste lokale Benutzer, der @heisenbridge schreibt, wird Besitzer. Der Besitzer kann weitere Benutzer zulassen.",
+    "invalid_user_id": "Muss eine Matrix-Benutzer-ID sein, z. B. @alice:example.org",
+    "maintenance_title": "Moderation und Wartung",
+    "draupnir": "Draupnir-Moderationsbot",
+    "draupnir_helper": "Das Modul legt das Bot-Konto @draupnir und einen Verwaltungsraum für den Server-Admin an. @draupnir in die Räume einladen, die er schützen soll; Sperrlisten und Schutzfunktionen werden mit !draupnir-Befehlen im Verwaltungsraum gesteuert.",
+    "draupnir_management_room": "Draupnir-Verwaltungsraum",
+    "state_compressor": "Raumzustand jede Nacht komprimieren",
+    "state_compressor_helper": "synapse_auto_compressor verkleinert die größte Tabelle der Synapse-Datenbank, während Synapse weiterläuft.",
+    "shared_secret_auth": "Anmeldung mit Shared Secret (matrix-synapse-shared-secret-auth)",
+    "shared_secret_auth_helper": "Vertrauenswürdige Werkzeuge, die das Secret unten kennen, können sich als jeder lokale Benutzer anmelden. Geheim halten.",
+    "shared_secret_auth_secret": "Shared Secret"
   },
   "common": {
     "required": "erforderlich",

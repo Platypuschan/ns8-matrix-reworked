@@ -49,7 +49,13 @@
                 "40002-40063/udp",
                 "40001/udp",
                 "20019/tcp"
-            ]
+            ],
+            "heisenbridge_owner": "",
+            "draupnir": true,
+            "state_compressor": true,
+            "shared_secret_auth": false,
+            "draupnir_management_room": "!abc:example.org",
+            "shared_secret_auth_secret": ""
         }
     ],
     "type": "object",
@@ -83,7 +89,13 @@
         "turn",
         "element_call",
         "calls_public_ip",
-        "calls_ports"
+        "calls_ports",
+        "heisenbridge_owner",
+        "draupnir",
+        "state_compressor",
+        "shared_secret_auth",
+        "draupnir_management_room",
+        "shared_secret_auth_secret"
     ],
     "properties": {
         "server_name": {
@@ -211,6 +223,26 @@
                 "type": "string"
             },
             "description": "Ports to open/forward for calls, like 40001/udp or 40002-40063/udp"
+        },
+        "heisenbridge_owner": {
+            "type": "string"
+        },
+        "draupnir": {
+            "type": "boolean"
+        },
+        "state_compressor": {
+            "type": "boolean"
+        },
+        "shared_secret_auth": {
+            "type": "boolean"
+        },
+        "draupnir_management_room": {
+            "type": "string",
+            "description": "Room ID of the Draupnir management room; empty while Draupnir is off or not provisioned"
+        },
+        "shared_secret_auth_secret": {
+            "type": "string",
+            "description": "The shared secret of shared-secret-auth; empty while it is off"
         }
     }
 }

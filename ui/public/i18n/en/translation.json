@@ -89,7 +89,19 @@
     "calls_public_ip": "Public IP address (optional)",
     "calls_public_ip_helper": "The address clients on the internet reach this node at, if it is behind NAT. Empty: LiveKit finds it with STUN, coturn announces the node's own addresses.",
     "calls_ports_description": "Open or forward these ports to this node:",
-    "invalid_ip_address": "Must be a public IPv4 or IPv6 address"
+    "invalid_ip_address": "Must be a public IPv4 or IPv6 address",
+    "heisenbridge_owner": "Heisenbridge owner (optional)",
+    "heisenbridge_owner_helper": "Matrix ID that administers the IRC bridge, like @alice:example.org. Empty: the first local user who writes to @heisenbridge becomes the owner. The owner can allow other users.",
+    "invalid_user_id": "Must be a Matrix user ID, like @alice:example.org",
+    "maintenance_title": "Moderation and maintenance",
+    "draupnir": "Draupnir moderation bot",
+    "draupnir_helper": "The module creates the bot account @draupnir and a management room for the server admin. Invite @draupnir to the rooms it should protect; ban lists and protections are managed with !draupnir commands in the management room.",
+    "draupnir_management_room": "Draupnir management room",
+    "state_compressor": "Compress room state every night",
+    "state_compressor_helper": "synapse_auto_compressor shrinks the largest table of the Synapse database while Synapse keeps running.",
+    "shared_secret_auth": "Shared-secret login (matrix-synapse-shared-secret-auth)",
+    "shared_secret_auth_helper": "Trusted tools that know the secret below can log in as any local user. Keep it secret.",
+    "shared_secret_auth_secret": "Shared secret"
   },
   "about": {
     "title": "About"

@@ -16,6 +16,7 @@ import os
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import matrix_setup as setup
@@ -158,11 +159,12 @@ def ensure_image(image, runner=subprocess.run):
 def generate_registration(key, state_dir=".", runner=subprocess.run):
     """Let the bridge complete its configuration and write its appservice
     registration (new as_token and hs_token)."""
-    env = setup.bridge_unit_env(key)
+    info = setup.BRIDGES[key]
+    env = {"BRIDGE_IMAGE": info["image"], "BRIDGE_BINARY": info.get("binary", f"/usr/bin/mautrix-{key}")}
     ensure_image(env["BRIDGE_IMAGE"], runner=runner)
     directory = os.path.abspath(os.path.join(state_dir, setup.BRIDGES_DIR, key))
     podman(
-        "run", "--rm", "--network=none",
+        "run", "--rm", "--network=none", "--user=0:0",
         "--volume", f"{directory}:/data:Z",
         "--entrypoint", env["BRIDGE_BINARY"],
         env["BRIDGE_IMAGE"],
@@ -177,9 +179,21 @@ def prepare_bridge(key, settings, port_map, state_dir=".", runner=subprocess.run
     directory = os.path.join(state_dir, setup.BRIDGES_DIR, key)
     setup.private_dir(os.path.join(state_dir, setup.BRIDGES_DIR))
     setup.private_dir(directory)
-    env = "".join(f"{name}={value}\n" for name, value in setup.bridge_unit_env(key).items())
+    setup.private_dir(os.path.join(state_dir, setup.SYNAPSE_DIR))
+    setup.private_dir(os.path.join(state_dir, setup.APPSERVICE_DIR))
+    # Quoted: systemd and bash both accept KEY="a b"
+    env = "".join(f'{name}="{value}"\n' for name, value in setup.bridge_unit_env(key, settings, port_map).items())
     if setup.write_private(os.path.join(directory, "unit.env"), env):
         setup.flag_restart(f"bridge-{key}", state_dir)
+
+    if setup.BRIDGES[key].get("kind") == "heisenbridge":
+        # No configuration of its own: the registration is all it reads
+        content = dump_yaml(setup.heisenbridge_registration(settings, port_map))
+        if setup.write_private(os.path.join(directory, "registration.yaml"), content):
+            setup.flag_restart(f"bridge-{key}", state_dir)
+        if setup.write_private(os.path.join(state_dir, setup.APPSERVICE_DIR, key + ".yaml"), content):
+            setup.flag_restart("synapse", state_dir)
+        return
 
     config_path = os.path.join(directory, "config.yaml")
     current = load_yaml(config_path)
@@ -225,6 +239,8 @@ def render_all(settings, port_map, ldap=None, smarthost=None, state_dir=".", run
     render_synapse(settings, port_map, ldap, smarthost, state_dir, udp_map)
     render_web(settings, state_dir)
     render_calls(settings, port_map, udp_map, state_dir)
+    env = "".join(f"{k}={v}\n" for k, v in setup.compressor_env(settings, port_map).items())
+    setup.write_private(os.path.join(state_dir, "compressor.env"), env)
     for key in settings["bridges"]:
         prepare_bridge(key, settings, port_map, state_dir, runner=runner)
     remove_disabled_registrations(settings, state_dir)
@@ -232,9 +248,12 @@ def render_all(settings, port_map, ldap=None, smarthost=None, state_dir=".", run
 
 # --- Synapse API -------------------------------------------------------------
 
-def http_json(url, data=None, timeout=10):
+def http_json(url, data=None, timeout=10, token=None, method=None):
     body = None if data is None else json.dumps(data).encode()
-    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, json.load(response)
@@ -266,6 +285,94 @@ def registration_mac(secret, nonce, user, password, admin=True):
         mac.update(b"\x00")
     mac.update(b"admin" if admin else b"notadmin")
     return mac.hexdigest()
+
+
+def register_user(settings, port_map, localpart, password, admin, request=http_json):
+    """Register a local account with the shared-secret registration API;
+    an existing account is fine."""
+    base = f"http://127.0.0.1:{port_map['synapse']}/_synapse/admin/v1/register"
+    status, answer = request(base)
+    if status != 200:
+        raise RuntimeError(f"Synapse registration nonce request failed: HTTP {status}")
+    body = {
+        "nonce": answer["nonce"],
+        "username": localpart,
+        "password": password,
+        "admin": admin,
+        "mac": registration_mac(
+            settings["secrets"]["registration_shared_secret"], answer["nonce"], localpart, password, admin
+        ),
+    }
+    status, answer = request(base, body)
+    if status != 200 and answer.get("errcode") != "M_USER_IN_USE":
+        raise RuntimeError(f"Creating the account {localpart} failed: HTTP {status} {answer.get('errcode', '')}")
+
+
+DRAUPNIR_STATE = os.path.join(setup.DRAUPNIR_DIR, "provisioned.json")
+
+
+def read_draupnir_state(state_dir="."):
+    try:
+        with open(os.path.join(state_dir, DRAUPNIR_STATE), "r", encoding="utf-8") as stream:
+            return json.load(stream)
+    except FileNotFoundError:
+        return {}
+
+
+def provision_draupnir(settings, port_map, state_dir=".", request=http_json):
+    """Create the Draupnir bot account (server admin, for its admin
+    commands), lift its rate limits, create its management room with the
+    module admin as manager and write its configuration. Each step is kept
+    and done only once."""
+    setup.private_dir(os.path.join(state_dir, setup.DRAUPNIR_DIR))
+    setup.private_dir(os.path.join(state_dir, setup.DRAUPNIR_DIR, "config"))
+    state = read_draupnir_state(state_dir)
+    base = f"http://127.0.0.1:{port_map['synapse']}"
+    server_name = settings["server_name"]
+    bot = setup.user_id(setup.DRAUPNIR_LOCALPART, server_name)
+    password = settings["secrets"]["draupnir_password"]
+
+    def save():
+        setup.write_json(os.path.join(state_dir, DRAUPNIR_STATE), state)
+
+    if not state.get("access_token"):
+        register_user(settings, port_map, setup.DRAUPNIR_LOCALPART, password, True, request=request)
+        status, answer = request(f"{base}/_matrix/client/v3/login", {
+            "type": "m.login.password",
+            "identifier": {"type": "m.id.user", "user": setup.DRAUPNIR_LOCALPART},
+            "password": password,
+            "initial_device_display_name": "Draupnir",
+        })
+        if status != 200:
+            raise RuntimeError(f"Draupnir login failed: HTTP {status} {answer.get('errcode', '')}")
+        state["access_token"] = answer["access_token"]
+        save()
+    token = state["access_token"]
+    if not state.get("ratelimit_override"):
+        # Required: Draupnir acts on many rooms at once and crashes when
+        # Synapse rate-limits it
+        quoted = urllib.parse.quote(bot)
+        status, answer = request(f"{base}/_synapse/admin/v1/users/{quoted}/override_ratelimit",
+                                 {"messages_per_second": 0, "burst_count": 0}, token=token)
+        if status != 200:
+            raise RuntimeError(f"Draupnir rate limit override failed: HTTP {status} {answer.get('errcode', '')}")
+        state["ratelimit_override"] = True
+        save()
+    if not state.get("management_room"):
+        status, answer = request(f"{base}/_matrix/client/v3/createRoom", {
+            "preset": "private_chat",
+            "name": "Draupnir management",
+            "topic": "Commands for the Draupnir moderation bot, see !draupnir help",
+            "invite": [setup.user_id(setup.ADMIN_LOCALPART, server_name)],
+        }, token=token)
+        if status != 200:
+            raise RuntimeError(f"Creating the Draupnir management room failed: HTTP {status}")
+        state["management_room"] = answer["room_id"]
+        save()
+    config = setup.draupnir_config(settings, port_map, token, state["management_room"])
+    if setup.write_json(os.path.join(state_dir, setup.DRAUPNIR_DIR, "config", "production.yaml"), config):
+        setup.flag_restart("draupnir", state_dir)
+    return state
 
 
 def ensure_admin(settings, port_map, state_dir=".", request=http_json):
