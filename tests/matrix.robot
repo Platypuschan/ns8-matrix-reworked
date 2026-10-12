@@ -262,8 +262,9 @@ Database dump and restore keep the data
     Configure current module    bridges=${{["whatsapp"]}}
     user2 reads the message
     Bot answers    whatsappbot
-    ${output}    ${rc} =    Execute Command    runagent -m ${module_id} module-dump-state
+    ${rc} =    Execute Command    runagent -m ${module_id} module-dump-state
     ...    return_rc=True    return_stdout=False
+    Should Be Equal As Integers    ${rc}    0    second dump failed
     ${rc} =    Execute Command    runagent -m ${module_id} module-cleanup-state
     ...    return_rc=True    return_stdout=False
     Should Be Equal As Integers    ${rc}    0
