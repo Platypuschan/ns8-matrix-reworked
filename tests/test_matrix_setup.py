@@ -88,8 +88,17 @@ class SettingsTest(StateTest):
         self.assertEqual(matrix_setup.read_settings(self.state)["element_host"], "")
 
     def test_bridges_are_ordered_and_unique(self):
-        settings = self.apply(bridges=["slack", "whatsapp", "slack"])
-        self.assertEqual(settings["bridges"], ["whatsapp", "slack"])
+        settings = self.apply(bridges=["discord", "whatsapp", "discord"])
+        self.assertEqual(settings["bridges"], ["whatsapp", "discord"])
+
+    def test_removed_bridges_are_dropped(self):
+        # A request or a backup from before 0.3.0 may still list them
+        settings = self.apply(bridges=["slack", "whatsapp", "linkedin"])
+        self.assertEqual(settings["bridges"], ["whatsapp"])
+        stored = json.loads(Path(self.state, matrix_setup.SETTINGS).read_text())
+        stored["bridges"] = ["meta", "signal"]
+        Path(self.state, matrix_setup.SETTINGS).write_text(json.dumps(stored))
+        self.assertEqual(matrix_setup.ensure_settings(self.state)["bridges"], ["signal"])
 
     def test_telegram_hash_is_kept_when_empty(self):
         self.apply(bridges=["telegram"], telegram_api_id="123", telegram_api_hash="abc")
@@ -106,18 +115,30 @@ class PortsTest(unittest.TestCase):
         ports = matrix_setup.ports(ENV)
         self.assertEqual(ports["synapse"], 20001)
         self.assertEqual(ports["postgres"], 20002)
-        self.assertEqual(ports["linkedin"], 20015)
+        self.assertEqual(ports["discord"], 20012)
+        self.assertEqual(ports["reserved_linkedin"], 20015)
         self.assertEqual(ports["wellknown"], 20016)
 
     def test_positions_never_change(self):
         # Ports of existing installations depend on these positions
         self.assertEqual(matrix_setup.PORT_NAMES[:5], ["synapse", "postgres", "element", "cinny", "ketesa"])
-        self.assertEqual(matrix_setup.PORT_NAMES[5:15], list(matrix_setup.BRIDGES))
+        self.assertEqual(matrix_setup.PORT_NAMES[5:15], [
+            "whatsapp", "signal", "telegram", "steam", "heisenbridge",
+            "reserved_slack", "discord", "reserved_bluesky", "reserved_twitter", "reserved_linkedin",
+        ])
+        self.assertTrue(set(matrix_setup.BRIDGES) <= set(matrix_setup.PORT_NAMES))
 
     def test_build_demands_enough_ports(self):
         build = (Path(__file__).resolve().parents[1] / "build-images.sh").read_text()
         demand = int(build.split("org.nethserver.tcp-ports-demand=")[1].split('"')[0])
         self.assertGreaterEqual(demand, len(matrix_setup.PORT_NAMES))
+
+    def test_ports_env_is_valid_shell(self):
+        # 80start_services sources it and systemd reads it as EnvironmentFile
+        with tempfile.TemporaryDirectory() as state:
+            matrix_runtime.write_ports(matrix_setup.ports(ENV), state)
+            for line in Path(state, "ports.env").read_text().splitlines():
+                self.assertRegex(line, r"^[A-Z][A-Z0-9_]*=[0-9]+$")
 
     def test_too_few_ports(self):
         with self.assertRaises(RuntimeError):
@@ -367,6 +388,107 @@ class CallsTest(StateTest):
         self.assertEqual(os.listdir(other), [])
 
 
+class NewComponentsTest(StateTest):
+    def test_steam_runs_isolated(self):
+        settings = self.apply(bridges=["steam"])
+        port_map = matrix_setup.ports(ENV)
+        env = matrix_setup.bridge_unit_env("steam", settings, port_map)
+        self.assertEqual(env["BRIDGE_BINARY"], "/app/steam")
+        self.assertEqual(env["BRIDGE_NET"],
+                         "--network=pasta:--map-host-loopback,169.254.1.3 --publish=127.0.0.1:20009:20009")
+        config = matrix_setup.patch_bridge_config({}, "steam", settings, port_map)
+        self.assertEqual(config["homeserver"]["address"], "http://169.254.1.3:20001")
+        self.assertIn("@169.254.1.3:20002/mautrix_steam?", config["database"]["uri"])
+        self.assertEqual(config["appservice"]["hostname"], "0.0.0.0")
+        # Synapse pushes to the published port on the host loopback
+        self.assertEqual(config["appservice"]["address"], "http://127.0.0.1:20009")
+        self.assertEqual(config["network"]["steam_bridge_path"], "/app")
+        # Other bridges stay in the host network
+        whatsapp = matrix_setup.bridge_unit_env("whatsapp", settings, port_map)
+        self.assertEqual(whatsapp["BRIDGE_NET"], "--network=host")
+        self.assertEqual(whatsapp["BRIDGE_ARGS"], "-c /data/config.yaml -r /data/registration.yaml")
+
+    def test_heisenbridge(self):
+        settings = self.apply(bridges=["heisenbridge"], heisenbridge_owner="@alice:matrix.example.org")
+        port_map = matrix_setup.ports(ENV)
+        env = matrix_setup.bridge_unit_env("heisenbridge", settings, port_map)
+        self.assertEqual(env["BRIDGE_DATABASE"], "none")
+        self.assertEqual(env["BRIDGE_ARGS"], "-c /data/registration.yaml -l 127.0.0.1 -p 20010 "
+                         "-o @alice:matrix.example.org http://127.0.0.1:20001")
+        registration = matrix_setup.heisenbridge_registration(settings, port_map)
+        self.assertEqual(registration["url"], "http://127.0.0.1:20010")
+        self.assertEqual(registration["as_token"], settings["secrets"]["heisenbridge_as_token"])
+        self.assertEqual(registration["namespaces"]["users"], [{"regex": "@hbirc_.*", "exclusive": True}])
+        # Rendering needs no container: the module writes the registration
+        calls = []
+        matrix_runtime.prepare_bridge("heisenbridge", settings, port_map, self.state,
+                                      runner=lambda *a, **k: calls.append(a))
+        self.assertEqual(calls, [])
+        self.assertIn("as_token: " + settings["secrets"]["heisenbridge_as_token"],
+                      Path(self.state, "synapse/appservices/heisenbridge.yaml").read_text())
+        with self.assertRaises(matrix_setup.SettingsError) as raised:
+            self.apply(heisenbridge_owner="alice")
+        self.assertEqual(raised.exception.error, "invalid_user_id")
+        env = matrix_setup.bridge_unit_env("heisenbridge", self.apply(heisenbridge_owner=""), port_map)
+        self.assertNotIn("-o", env["BRIDGE_ARGS"].split())
+
+    def test_shared_secret_auth(self):
+        settings = self.apply()
+        self.assertNotIn("modules", matrix_setup.homeserver_config(settings, matrix_setup.ports(ENV)))
+        settings = self.apply(shared_secret_auth=True)
+        module = matrix_setup.homeserver_config(settings, matrix_setup.ports(ENV))["modules"][0]
+        self.assertEqual(module["module"], "shared_secret_authenticator.SharedSecretAuthProvider")
+        self.assertEqual(module["config"]["shared_secret"], settings["secrets"]["shared_secret_auth_secret"])
+        output = matrix_setup.configuration(settings, [], admin_ready=True)
+        self.assertEqual(output["shared_secret_auth_secret"], settings["secrets"]["shared_secret_auth_secret"])
+        self.assertEqual(matrix_setup.configuration(self.apply(shared_secret_auth=False), [], True)["shared_secret_auth_secret"], "")
+        build = (Path(__file__).resolve().parents[1] / "build-images.sh").read_text()
+        self.assertIn("matrix-synapse-shared-secret-auth/2.0.3/shared_secret_authenticator.py", build)
+
+    def test_compressor_env(self):
+        settings = self.apply()
+        self.assertTrue(settings["state_compressor"])
+        env = matrix_setup.compressor_env(settings, matrix_setup.ports(ENV))
+        self.assertTrue(env["POSTGRES_LOCATION"].endswith("@127.0.0.1:20002/synapse"))
+
+    def test_provision_draupnir(self):
+        settings = self.apply(draupnir=True)
+        port_map = matrix_setup.ports(ENV)
+        requests = []
+
+        def request(url, data=None, token=None, method=None):
+            requests.append((url.split("20001", 1)[1], data, token))
+            if url.endswith("/register"):
+                return (200, {"nonce": "n"}) if data is None else (200, {})
+            if url.endswith("/login"):
+                return 200, {"access_token": "bot-token"}
+            if url.endswith("/createRoom"):
+                return 200, {"room_id": "!mgmt:matrix.example.org"}
+            return 200, {}
+
+        state = matrix_runtime.provision_draupnir(settings, port_map, self.state, request=request)
+        self.assertEqual(state["management_room"], "!mgmt:matrix.example.org")
+        paths = [item[0] for item in requests]
+        self.assertIn("/_synapse/admin/v1/users/%40draupnir%3Amatrix.example.org/override_ratelimit", paths)
+        create = next(item for item in requests if item[0].endswith("/createRoom"))
+        self.assertEqual(create[1]["invite"], ["@matrixadmin:matrix.example.org"])
+        self.assertEqual(create[2], "bot-token")
+        registration = next(item for item in requests if item[0].endswith("/register") and item[1])
+        self.assertTrue(registration[1]["admin"])
+        config = json.loads(Path(self.state, "draupnir/config/production.yaml").read_text())
+        self.assertEqual(config["accessToken"], "bot-token")
+        self.assertEqual(config["managementRoom"], "!mgmt:matrix.example.org")
+        self.assertEqual(config["homeserverUrl"], "http://127.0.0.1:20001")
+        self.assertEqual(self.mode("draupnir"), 0o700)
+        self.assertEqual(self.mode("draupnir", "provisioned.json"), 0o600)
+        # Done once: a second run sends nothing
+        requests.clear()
+        matrix_runtime.provision_draupnir(settings, port_map, self.state, request=request)
+        self.assertEqual(requests, [])
+        output = matrix_setup.configuration(settings, [], True, draupnir_room=state["management_room"])
+        self.assertEqual(output["draupnir_management_room"], "!mgmt:matrix.example.org")
+
+
 class OutputTest(StateTest):
     def test_configuration_hides_secrets(self):
         settings = self.apply(bridges=["telegram"], telegram_api_id="1", telegram_api_hash="secret-hash")
@@ -407,6 +529,7 @@ class RuntimeTest(StateTest):
                 returncode = 0
             if args[:2] == ("podman", "run"):
                 # The bridge writes its registration (like -g does)
+                self.assertIn("--user=0:0", args)
                 data = args[args.index("--volume") + 1].split(":")[0]
                 Path(data, "registration.yaml").write_text("id: x\nurl: http://localhost:1\nas_token: t\n")
             return Result()

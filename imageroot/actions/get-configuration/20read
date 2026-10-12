@@ -9,6 +9,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_runtime
 import matrix_setup
 from agent.ldapproxy import Ldapproxy
 
@@ -26,6 +27,7 @@ json.dump(
     matrix_setup.configuration(
         settings, domains, os.path.exists("admin-created"),
         port_map=matrix_setup.ports(), udp_map=matrix_setup.udp_ports(),
+        draupnir_room=matrix_runtime.read_draupnir_state().get("management_room", ""),
     ),
     fp=sys.stdout,
 )

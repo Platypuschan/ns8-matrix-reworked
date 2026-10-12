@@ -33,7 +33,17 @@ module_images=(
 	docker.io/coturn/coturn:4.18.0-alpine
 	docker.io/livekit/livekit-server:v1.13.7
 	ghcr.io/element-hq/lk-jwt-service:0.7.0
+	ghcr.io/the-draupnir-project/draupnir:v3.1.0
+	registry.gitlab.com/mb-saces/rust-synapse-tools:v0.0.3
 )
+
+# matrix-synapse-shared-secret-auth (AGPL-3.0), pinned by tag and checksum.
+# It is not stored in this repository; Synapse loads it from
+# synapse-modules/ (see synapse.service).
+shared_secret_auth_url="https://raw.githubusercontent.com/devture/matrix-synapse-shared-secret-auth/2.0.3/shared_secret_authenticator.py"
+shared_secret_auth_sha256="f7aede3d021ff53e35c8c4e3af7065870c42f0f40783ca7bc820d49df2e7a31d"
+curl -fsSL -o imageroot/synapse-modules/shared_secret_authenticator.py "${shared_secret_auth_url}"
+echo "${shared_secret_auth_sha256}  imageroot/synapse-modules/shared_secret_authenticator.py" | sha256sum -c -
 
 # Create a new empty container image
 container=$(buildah from scratch)

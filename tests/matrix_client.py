@@ -12,6 +12,8 @@ failed; the reason is on stderr.
 """
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import socket
@@ -28,16 +30,23 @@ CONTEXT.verify_mode = ssl.CERT_NONE
 
 
 class Client:
-    def __init__(self, host, token=None):
+    def __init__(self, host, token=None, direct_port=None, forwarded_for=None):
         self.host = host
         self.token = token
+        # Talk to Synapse directly (not through Traefik); with a forwarded
+        # address the request counts against that address' rate limits
+        self.direct_port = direct_port
+        self.forwarded_for = forwarded_for
 
     def request(self, method, path, body=None, expect=(200,)):
         headers = {"Host": self.host, "Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
+        if self.forwarded_for:
+            headers["X-Forwarded-For"] = self.forwarded_for
         data = None if body is None else json.dumps(body).encode()
-        request = urllib.request.Request("https://127.0.0.1" + path, data=data, method=method, headers=headers)
+        base = f"http://127.0.0.1:{self.direct_port}" if self.direct_port else "https://127.0.0.1"
+        request = urllib.request.Request(base + path, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, context=CONTEXT, timeout=30) as response:
                 status, raw, ctype = response.status, response.read(), response.headers.get("Content-Type", "")
@@ -85,6 +94,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", required=True)
     parser.add_argument("--token")
+    parser.add_argument("--direct-port", type=int)
+    parser.add_argument("--forwarded-for")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("versions")
     get = sub.add_parser("get")
@@ -107,10 +118,17 @@ def main():
     p = sub.add_parser("stun")
     p.add_argument("port", type=int)
     sub.add_parser("sfu-token")
+    p = sub.add_parser("ssa-login")
+    p.add_argument("user_id")
+    p.add_argument("secret")
+    p = sub.add_parser("room-command")
+    p.add_argument("room")
+    p.add_argument("bot")
+    p.add_argument("body")
     p = sub.add_parser("server-admin")
     p.add_argument("user_id")
     args = parser.parse_args()
-    client = Client(args.host, args.token)
+    client = Client(args.host, args.token, args.direct_port, args.forwarded_for)
 
     if args.command == "versions":
         result = client.request("GET", "/_matrix/client/versions")[0]
@@ -177,6 +195,28 @@ def main():
         if not isinstance(answer, dict) or not answer.get("jwt"):
             raise SystemExit(f"no LiveKit token: {answer}")
         result = {"url": answer.get("url"), "jwt_parts": len(answer["jwt"].split("."))}
+    elif args.command == "ssa-login":
+        # matrix-synapse-shared-secret-auth: token = HMAC-SHA512(secret, user ID)
+        token = hmac.new(args.secret.encode(), args.user_id.encode(), hashlib.sha512).hexdigest()
+        answer = client.call("POST", "/login", {
+            "type": "com.devture.shared_secret_auth",
+            "identifier": {"type": "m.id.user", "user": args.user_id},
+            "token": token,
+        }, expect=(200, 403))
+        if "access_token" not in answer:
+            raise SystemExit(f"shared-secret login failed: {answer}")
+        result = {"user_id": answer["user_id"]}
+    elif args.command == "room-command":
+        quoted = urllib.parse.quote(args.room)
+        client.call("POST", f"/rooms/{quoted}/join", {})
+        client.call("PUT", f"/rooms/{quoted}/send/m.room.message/t{time.time_ns()}",
+                    {"msgtype": "m.text", "body": args.body})
+        reply = wait(
+            lambda: next((e["content"].get("body") for e in messages(client, args.room)
+                          if e["sender"] == args.bot and e["type"] == "m.room.message"), None),
+            120, f"a message from {args.bot}",
+        )
+        result = {"reply": reply[:300]}
     elif args.command == "whoami":
         result = client.call("GET", "/account/whoami")
     elif args.command == "server-admin":

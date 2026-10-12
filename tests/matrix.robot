@@ -1,6 +1,7 @@
 *** Settings ***
 Library    SSHLibrary
 Library    String
+Library    Collections
 Test Setup    Stop after a failed step
 
 *** Variables ***
@@ -23,6 +24,7 @@ ${room_id}           ${EMPTY}
 # overwrite ${ADMIN_PASSWORD} of the cluster-admin login below.
 ${matrix_admin_password}    ${EMPTY}
 ${admin_token}       ${EMPTY}
+&{user_tokens}
 ${ADMIN_USER}        admin
 ${ADMIN_PASSWORD}    Nethesis,1234
 
@@ -55,7 +57,7 @@ Run action
 
 Configure current module
     [Arguments]    &{extra}
-    ${payload} =    Evaluate    json.dumps({"host": $HOST, "server_name": $SERVER_NAME, "http2https": False, "lets_encrypt": False, "user_domain": $USER_DOMAIN, "federation": True, "wellknown_on_server_name": True, "element_host": $ELEMENT_HOST, "cinny_host": $CINNY_HOST, "ketesa_host": $KETESA_HOST, "bridges": ["whatsapp", "discord"], "turn": True, "element_call": True, **$extra})    modules=json
+    ${payload} =    Evaluate    json.dumps({"host": $HOST, "server_name": $SERVER_NAME, "http2https": False, "lets_encrypt": False, "user_domain": $USER_DOMAIN, "federation": True, "wellknown_on_server_name": True, "element_host": $ELEMENT_HOST, "cinny_host": $CINNY_HOST, "ketesa_host": $KETESA_HOST, "bridges": ["whatsapp", "discord", "steam", "heisenbridge"], "turn": True, "element_call": True, "draupnir": True, "shared_secret_auth": True, "state_compressor": True, **$extra})    modules=json
     ${output}    ${rc} =    Run action    configure-module    ${payload}
     Should Be Equal As Integers    ${rc}    0    configure-module failed: ${output}
 
@@ -82,7 +84,14 @@ Matrix
 
 Token of
     [Arguments]    ${user}    ${password}
+    # Synapse allows 5 logins per client address, then about one every 5
+    # minutes, and every test login comes from 127.0.0.1: log in once per user
+    ${known} =    Evaluate    $user in $user_tokens
+    IF    ${known}
+        RETURN    ${user_tokens}[${user}]
+    END
     ${login} =    Matrix    login    ${user}    '${password}'
+    Set To Dictionary    ${user_tokens}    ${user}=${login}[access_token]
     RETURN    ${login}[access_token]
 
 Read admin credentials
@@ -143,7 +152,12 @@ Add module for ${SCENARIO} scenario
     Set Suite Variable    ${module_id}    ${output.module_id}
 
 Configure initial module
-    Configure current module
+    IF    r'${SCENARIO}' == 'update'
+        # The previous release may not know the newer bridges yet
+        Configure current module    bridges=${{["whatsapp", "discord"]}}
+    ELSE
+        Configure current module
+    END
     Read admin credentials
     IF    r'${SCENARIO}' == 'update'
         # Data written before the update must survive it
@@ -207,6 +221,41 @@ Bridge bots answer
     Unit is    bridge@discord.service    active
     Bot answers    whatsappbot
     Bot answers    discordbot
+    # Steam runs in its own network namespace (pasta, host loopback mapped)
+    Unit is    bridge@steam.service    active
+    Bot answers    steambot
+    Unit is    bridge@heisenbridge.service    active
+    Bot answers    heisenbridge
+
+Draupnir answers in its management room
+    Unit is    draupnir.service    active
+    Read admin credentials
+    &{config} =    Get configuration
+    Should Start With    ${config.draupnir_management_room}    !
+    ${answer} =    Matrix    room-command    '${config.draupnir_management_room}'    @draupnir:${SERVER_NAME}    '!draupnir status'    token=${admin_token}
+    Should Not Be Empty    ${answer}[reply]
+
+Shared-secret login works
+    &{config} =    Get configuration
+    Should Not Be Empty    ${config.shared_secret_auth_secret}
+    # Directly to Synapse with an address of its own: the earlier logins of
+    # the suite used up the rate limit of 127.0.0.1
+    ${port} =    Execute Command    runagent -m ${module_id} sh -c '. ./ports.env; echo $SYNAPSE_PORT'
+    ${direct} =    Set Variable    python3 /root/matrix_client.py --host ${HOST} --direct-port ${port}
+    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.21 ssa-login @user1:${SERVER_NAME} ${config.shared_secret_auth_secret}
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}    0    shared-secret login failed: ${output}
+    Should Contain    ${output}    "user_id": "@user1:${SERVER_NAME}"
+    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.22 ssa-login @user1:${SERVER_NAME} wrong-secret 2>&1
+    ...    return_rc=True
+    Should Not Be Equal As Integers    ${rc}    0    a wrong shared secret was accepted
+    Should Contain    ${output}    M_FORBIDDEN
+
+State compressor runs
+    Unit is    synapse-compressor.timer    active
+    ${output}    ${rc} =    Execute Command    runagent -m ${module_id} systemctl --user start synapse-compressor.service
+    ...    return_rc=True    return_stderr=True    return_stdout=False
+    Should Be Equal As Integers    ${rc}    0    the compressor run failed: ${output}
 
 TURN server answers and is announced
     Unit is    coturn.service    active
@@ -259,6 +308,8 @@ Saving unchanged settings keeps the services running
 A bridge can be disabled
     Configure current module    bridges=${{["whatsapp"]}}
     Unit is    bridge@discord.service    inactive
+    Unit is    bridge@steam.service    inactive
+    Unit is    bridge@heisenbridge.service    inactive
     Unit is    bridge@whatsapp.service    active
     ${rc} =    Execute Command    runagent -m ${module_id} test ! -e synapse/appservices/discord.yaml
     ...    return_rc=True    return_stdout=False
@@ -298,8 +349,8 @@ Invalid settings are rejected
     Should Be Equal    ${config.element_host}    ${ELEMENT_HOST}
 
 Secrets stay in private files
-    ${modes} =    Execute Command    runagent -m ${module_id} stat -c '%a' matrix.json postgres.env synapse synapse/homeserver.yaml bridges/whatsapp/config.yaml calls calls/turnserver.conf calls/livekit.yaml calls/lk-jwt.env
-    Should Be Equal    ${modes}    600\n600\n700\n600\n600\n700\n600\n600\n600
+    ${modes} =    Execute Command    runagent -m ${module_id} stat -c '%a' matrix.json postgres.env synapse synapse/homeserver.yaml bridges/whatsapp/config.yaml calls calls/turnserver.conf calls/livekit.yaml calls/lk-jwt.env draupnir draupnir/provisioned.json compressor.env
+    Should Be Equal    ${modes}    600\n600\n700\n600\n600\n700\n600\n600\n600\n700\n600\n600
     ${environment} =    Execute Command    runagent -m ${module_id} cat environment
     Should Not Contain    ${environment}    ${matrix_admin_password}
     Should Not Contain    ${environment}    PASSWORD
@@ -330,7 +381,7 @@ Database dump and restore keep the data
 
 Backup includes settings, bridges, dump and media
     ${include} =    Execute Command    runagent -m ${module_id} sh -c 'cat ../etc/state-include.conf'
-    FOR    ${line}    IN    state/matrix.json    state/postgresql.pg_dump    state/bridges    volumes/synapse-data
+    FOR    ${line}    IN    state/matrix.json    state/postgresql.pg_dump    state/bridges    state/draupnir    volumes/synapse-data
         Should Match Regexp    ${include}    (?m)^${line}$
     END
 
