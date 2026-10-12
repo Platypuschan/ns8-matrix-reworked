@@ -90,8 +90,11 @@ Read admin credentials
     Should Be Equal    ${config.admin_user}    @matrixadmin:${SERVER_NAME}
     Should Not Be Empty    ${config.admin_password}
     Set Suite Variable    ${matrix_admin_password}    ${config.admin_password}
-    ${token} =    Token of    matrixadmin    ${matrix_admin_password}
-    Set Suite Variable    ${admin_token}    ${token}
+    # Synapse limits logins per account: log in once and keep the token
+    IF    not $admin_token
+        ${token} =    Token of    matrixadmin    ${matrix_admin_password}
+        Set Suite Variable    ${admin_token}    ${token}
+    END
 
 Unit is
     [Arguments]    ${unit}    ${state}

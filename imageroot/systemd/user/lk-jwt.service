@@ -30,7 +30,10 @@ ExecStart=/usr/bin/podman run --conmon-pidfile %t/lk-jwt.pid \
     $LK_JWT_HOST_ARGS \
     --env-file=%E/state/calls/lk-jwt.env \
     ${LK_JWT_SERVICE_IMAGE}
-ExecStop=/usr/bin/podman stop --ignore --cidfile %t/lk-jwt.ctr-id -t 10
+# The service runs as PID 1 of the container and ignores SIGTERM: podman
+# kills it after the timeout, which is a normal stop here
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/lk-jwt.ctr-id -t 3
+SuccessExitStatus=137 143
 ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/lk-jwt.ctr-id
 SyslogIdentifier=%u
 PIDFile=%t/lk-jwt.pid
