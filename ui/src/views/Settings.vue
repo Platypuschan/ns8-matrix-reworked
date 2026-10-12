@@ -277,6 +277,62 @@
                 ref="telegram_api_hash"
               />
             </template>
+            <!-- calls -->
+            <h4 class="mg-top mg-bottom-sm">
+              {{ $t("settings.calls_title") }}
+            </h4>
+            <p class="mg-bottom helper">
+              {{ $t("settings.calls_description") }}
+            </p>
+            <cv-toggle
+              id="element-call"
+              value="elementCall"
+              :label="$t('settings.element_call')"
+              v-model="elementCall"
+              :disabled="busy"
+              class="mg-bottom"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <cv-toggle
+              id="turn"
+              value="turn"
+              :label="$t('settings.turn')"
+              v-model="turn"
+              :disabled="busy"
+              class="mg-bottom"
+            >
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </cv-toggle>
+            <template v-if="turn || elementCall">
+              <cv-text-input
+                id="calls-public-ip"
+                :label="$t('settings.calls_public_ip')"
+                :helper-text="$t('settings.calls_public_ip_helper')"
+                placeholder="203.0.113.10"
+                v-model.trim="callsPublicIp"
+                class="mg-bottom"
+                :invalid-message="$t(error.calls_public_ip)"
+                :disabled="busy"
+                ref="calls_public_ip"
+              />
+              <div v-if="callsPorts.length" class="mg-bottom">
+                <p class="mg-bottom-sm helper">
+                  {{ $t("settings.calls_ports_description") }}
+                </p>
+                <code id="calls-ports">{{ callsPorts.join(", ") }}</code>
+              </div>
+            </template>
             <!-- advanced -->
             <cv-accordion class="mg-bottom">
               <cv-accordion-item :open="toggleAccordion[0]">
@@ -377,6 +433,10 @@ export default {
       telegramApiId: "",
       telegramApiHash: "",
       telegramApiHashSet: false,
+      turn: false,
+      elementCall: false,
+      callsPublicIp: "",
+      callsPorts: [],
       mailFrom: "",
       maxUploadMb: 100,
       toggleAccordion: [false],
@@ -403,6 +463,7 @@ export default {
         telegram_api_id: "",
         telegram_api_hash: "",
         mail_from: "",
+        calls_public_ip: "",
         max_upload_mb: "",
       },
     };
@@ -518,6 +579,10 @@ export default {
       this.telegramApiId = config.telegram_api_id;
       this.telegramApiHash = "";
       this.telegramApiHashSet = config.telegram_api_hash_set;
+      this.turn = config.turn;
+      this.elementCall = config.element_call;
+      this.callsPublicIp = config.calls_public_ip;
+      this.callsPorts = config.calls_ports;
       this.mailFrom = config.mail_from;
       this.maxUploadMb = config.max_upload_mb;
       this.homeserverUrl = config.homeserver_url;
@@ -593,6 +658,9 @@ export default {
           .filter((id) => this.bridgeEnabled[id]),
         telegram_api_id: this.telegramApiId,
         telegram_api_hash: this.telegramApiHash,
+        turn: this.turn,
+        element_call: this.elementCall,
+        calls_public_ip: this.callsPublicIp,
         mail_from: this.mailFrom,
         max_upload_mb: parseInt(this.maxUploadMb, 10),
       };

@@ -27,12 +27,17 @@ with matrix_setup.settings_lock():
         matrix_setup.ports(),
         ldap=matrix_runtime.ldap_settings(settings.get("user_domain")),
         smarthost=matrix_runtime.smarthost_settings(),
+        udp_map=matrix_setup.udp_ports(),
     )
 
 units = ["postgresql.service", "synapse.service"]
 units += [f"{app}.service" for app in matrix_setup.WEB_APPS if settings[f"{app}_host"]]
 if matrix_setup.serves_wellknown(settings):
     units.append("wellknown.service")
+if settings.get("turn"):
+    units.append("coturn.service")
+if settings.get("element_call"):
+    units += ["livekit.service", "lk-jwt.service"]
 units += [f"bridge@{key}.service" for key in settings["bridges"]]
 for unit in units:
     subprocess.run(["systemctl", "--user", "try-restart", unit], check=True)

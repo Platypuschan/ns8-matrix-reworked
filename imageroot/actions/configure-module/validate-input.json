@@ -22,9 +22,16 @@
             "ketesa_host": "matrix-admin.example.org",
             "mail_from": "matrix@example.org",
             "max_upload_mb": 100,
-            "bridges": ["whatsapp", "signal", "telegram"],
+            "bridges": [
+                "whatsapp",
+                "signal",
+                "telegram"
+            ],
             "telegram_api_id": "12345",
-            "telegram_api_hash": "0123456789abcdef0123456789abcdef"
+            "telegram_api_hash": "0123456789abcdef0123456789abcdef",
+            "turn": true,
+            "element_call": true,
+            "calls_public_ip": ""
         }
     ],
     "type": "object",
@@ -95,7 +102,18 @@
             "description": "Enabled mautrix bridges",
             "items": {
                 "type": "string",
-                "enum": ["whatsapp", "signal", "telegram", "meta", "gmessages", "slack", "discord", "bluesky", "twitter", "linkedin"]
+                "enum": [
+                    "whatsapp",
+                    "signal",
+                    "telegram",
+                    "meta",
+                    "gmessages",
+                    "slack",
+                    "discord",
+                    "bluesky",
+                    "twitter",
+                    "linkedin"
+                ]
             },
             "uniqueItems": true
         },
@@ -108,6 +126,19 @@
             "type": "string",
             "description": "Telegram API hash; empty keeps the stored one",
             "maxLength": 64
+        },
+        "turn": {
+            "type": "boolean",
+            "description": "Run the coturn TURN server (UDP) for calls; Synapse and LiveKit use it"
+        },
+        "element_call": {
+            "type": "boolean",
+            "description": "Element Call (MatrixRTC): LiveKit SFU and JWT service below the homeserver host, embedded Element Call in Element Web"
+        },
+        "calls_public_ip": {
+            "type": "string",
+            "description": "Public IP address of the node for TURN and LiveKit media; empty: coturn uses the node addresses, LiveKit asks a STUN server",
+            "maxLength": 45
         }
     }
 }

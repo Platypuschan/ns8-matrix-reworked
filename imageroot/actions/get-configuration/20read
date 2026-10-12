@@ -23,6 +23,9 @@ settings.setdefault("secrets", {})
 for key, value in matrix_setup.DEFAULTS.items():
     settings.setdefault(key, value)
 json.dump(
-    matrix_setup.configuration(settings, domains, os.path.exists("admin-created")),
+    matrix_setup.configuration(
+        settings, domains, os.path.exists("admin-created"),
+        port_map=matrix_setup.ports(), udp_map=matrix_setup.udp_ports(),
+    ),
     fp=sys.stdout,
 )

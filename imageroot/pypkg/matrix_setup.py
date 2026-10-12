@@ -21,6 +21,7 @@ and leaves everything else as the bridge wrote it.
 
 import contextlib
 import copy
+import ipaddress
 import fcntl
 import json
 import os
@@ -65,7 +66,23 @@ PORT_NAMES = [
     "twitter",
     "linkedin",
     "wellknown",
+    # Element Call: LiveKit signalling (through Traefik), LiveKit ICE/TCP
+    # (public) and the LiveKit JWT service (through Traefik)
+    "livekit",
+    "livekit_tcp",
+    "lk_jwt",
 ]
+
+# Allocated UDP ports (UDP_PORTS_RANGE): the TURN listener, the LiveKit
+# media port (all calls share it) and the TURN relay range.
+UDP_PORTS_DEMAND = 64
+UDP_TURN = 0
+UDP_LIVEKIT = 1
+UDP_RELAY_FIRST = 2
+
+# Path prefixes of the Element Call backend on the homeserver host
+LIVEKIT_PATH = "/livekit/sfu"
+LK_JWT_PATH = "/livekit/jwt"
 
 # mautrix bridges. "legacy" bridges still use the configuration layout of
 # mautrix-go before bridgev2 (database below appservice, double puppeting
@@ -175,6 +192,9 @@ DEFAULTS = {
     "bridges": [],
     "telegram_api_id": "",
     "telegram_api_hash": "",
+    "turn": False,
+    "element_call": False,
+    "calls_public_ip": "",
 }
 
 SECRET_KEYS = (
@@ -185,6 +205,9 @@ SECRET_KEYS = (
     "doublepuppet_as_token",
     "doublepuppet_hs_token",
     "admin_password",
+    "turn_shared_secret",
+    "livekit_key",
+    "livekit_secret",
 )
 
 
@@ -200,7 +223,13 @@ def ensure_settings(state_dir="."):
     stored = settings.setdefault("secrets", {})
     for key in SECRET_KEYS:
         if not stored.get(key):
-            stored[key] = new_password() if key == "admin_password" else new_secret()
+            if key == "admin_password":
+                stored[key] = new_password()
+            elif key == "livekit_key":
+                # An API key name, sent in clear in LiveKit tokens
+                stored[key] = "lk" + new_password(14)
+            else:
+                stored[key] = new_secret()
             changed = True
     path = os.path.join(state_dir, SETTINGS)
     if changed:
@@ -287,7 +316,17 @@ def apply_request(data, state_dir=".", write=True):
         if not new["telegram_api_hash"]:
             raise SettingsError("telegram_api_hash", "", "telegram_credentials_required")
 
-    for key in ("lets_encrypt", "http2https", "federation", "wellknown_on_server_name"):
+    new["calls_public_ip"] = str(new["calls_public_ip"] or "").strip()
+    if new["calls_public_ip"]:
+        try:
+            address = ipaddress.ip_address(new["calls_public_ip"])
+        except ValueError:
+            raise SettingsError("calls_public_ip", new["calls_public_ip"], "invalid_ip_address") from None
+        if address.is_private or address.is_loopback or address.is_unspecified or address.is_multicast:
+            raise SettingsError("calls_public_ip", new["calls_public_ip"], "invalid_ip_address")
+        new["calls_public_ip"] = str(address)
+
+    for key in ("lets_encrypt", "http2https", "federation", "wellknown_on_server_name", "turn", "element_call"):
         new[key] = bool(new[key])
     new["user_domain"] = (new["user_domain"] or "").strip()
 
@@ -310,6 +349,27 @@ def ports(environ=os.environ):
     if len(allocated) < len(PORT_NAMES):
         raise RuntimeError(f"{len(PORT_NAMES)} TCP ports needed, {len(allocated)} allocated")
     return dict(zip(PORT_NAMES, allocated))
+
+
+def udp_ports(environ=os.environ):
+    """Return the UDP ports for calls, or None if the module has none (an
+    instance installed before 0.2.0 gets them when calls are enabled)."""
+    span = environ.get("UDP_PORTS_RANGE", "")
+    if not span:
+        return None
+    first, last = (int(item) for item in span.split("-"))
+    if last - first + 1 < UDP_PORTS_DEMAND:
+        raise RuntimeError(f"{UDP_PORTS_DEMAND} UDP ports needed, {span} allocated")
+    return {
+        "turn": first + UDP_TURN,
+        "livekit": first + UDP_LIVEKIT,
+        "relay_first": first + UDP_RELAY_FIRST,
+        "relay_last": first + UDP_PORTS_DEMAND - 1,
+    }
+
+
+def calls_enabled(settings):
+    return bool(settings.get("turn") or settings.get("element_call"))
 
 
 def user_id(localpart, server_name):
@@ -401,9 +461,12 @@ def serves_wellknown(settings):
 
 def wellknown_documents(settings):
     """/.well-known/matrix/server and /client for the server name domain."""
+    client = {"m.homeserver": {"base_url": f"https://{settings['host']}"}}
+    if settings.get("element_call"):
+        client["org.matrix.msc4143.rtc_foci"] = rtc_foci(settings)
     return {
         "server": {"m.server": f"{settings['host']}:443"},
-        "client": {"m.homeserver": {"base_url": f"https://{settings['host']}"}},
+        "client": client,
     }
 
 
@@ -413,9 +476,63 @@ def appservice_files(settings):
     return files
 
 
-def homeserver_config(settings, port_map, ldap=None, smarthost=None):
+def livekit_service_url(settings):
+    return f"https://{settings['host']}{LK_JWT_PATH}"
+
+
+def rtc_foci(settings):
+    """MatrixRTC backend for the client well-known. Element Call running as a
+    widget (Element Web, Element Desktop) has no access token for the
+    homeserver's RTC transports API and still reads this property."""
+    return [{"type": "livekit", "livekit_service_url": livekit_service_url(settings)}]
+
+
+def turn_uris(settings, udp_map):
+    return [f"turn:{settings['host']}:{udp_map['turn']}?transport=udp"]
+
+
+def calls_config(settings, udp_map):
+    """Synapse settings for TURN (classic 1:1 calls) and MatrixRTC."""
+    config = {}
+    if settings.get("turn") and udp_map:
+        config.update({
+            "turn_uris": turn_uris(settings, udp_map),
+            "turn_shared_secret": settings["secrets"]["turn_shared_secret"],
+            "turn_user_lifetime": "1d",
+            "turn_allow_guests": False,
+        })
+    if settings.get("element_call"):
+        config.update({
+            "experimental_features": {
+                # Room summaries, RTC transports API, state_after in sync
+                # and sticky events, as used by Element Call
+                "msc3266_enabled": True,
+                "msc4143_enabled": True,
+                "msc4222_enabled": True,
+                "msc4354_enabled": True,
+            },
+            "matrix_rtc": {"transports": rtc_foci(settings)},
+            # Delayed events (MSC4140) end a call membership when a client
+            # disappears; without them calls stay stuck in rooms.
+            "max_event_delay_duration": "24h",
+            "rc_delayed_event_mgmt": {"per_second": 1, "burst_count": 20},
+            # Call signalling sends bursts of events
+            "rc_message": {"per_second": 0.5, "burst_count": 30},
+            "extra_well_known_client_content": {"org.matrix.msc4143.rtc_foci": rtc_foci(settings)},
+        })
+    return config
+
+
+def homeserver_config(settings, port_map, ldap=None, smarthost=None, udp_map=None):
     stored = settings["secrets"]
-    resources = ["client", "federation"] if settings["federation"] else ["client"]
+    if settings["federation"]:
+        resources = ["client", "federation"]
+    elif settings.get("element_call"):
+        # The LiveKit JWT service checks OpenID tokens with the federation
+        # userinfo endpoint, which "openid" serves alone
+        resources = ["client", "openid"]
+    else:
+        resources = ["client"]
     config = {
         "server_name": settings["server_name"],
         "public_baseurl": f"https://{settings['host']}/",
@@ -457,13 +574,13 @@ def homeserver_config(settings, port_map, ldap=None, smarthost=None):
         "app_service_config_files": appservice_files(settings),
         "suppress_key_server_warning": True,
     }
+    if not delegated(settings) and (settings["federation"] or settings.get("element_call")):
+        # Synapse answers {"m.server": "<server_name>:443"}: other servers,
+        # and the LiveKit JWT service, find the federation API (OpenID) on
+        # port 443 of the host. A delegated server name gets its own
+        # document, see wellknown_documents().
+        config["serve_server_wellknown"] = True
     if settings["federation"]:
-        if not delegated(settings):
-            # Synapse answers {"m.server": "<server_name>:443"}: other
-            # servers find the federation API on port 443 of the host. A
-            # delegated server name gets its own document, see
-            # wellknown_documents().
-            config["serve_server_wellknown"] = True
         config["trusted_key_servers"] = [{"server_name": "matrix.org"}]
     else:
         config["federation_domain_whitelist"] = []
@@ -473,6 +590,7 @@ def homeserver_config(settings, port_map, ldap=None, smarthost=None):
     email = email_section(settings, smarthost)
     if email:
         config["email"] = email
+    config.update(calls_config(settings, udp_map))
     return config
 
 
@@ -509,7 +627,7 @@ def double_puppet_registration(settings):
 # --- Web apps ------------------------------------------------------------------
 
 def element_config(settings):
-    return {
+    config = {
         "default_server_name": settings["server_name"],
         "default_server_config": {
             "m.homeserver": {
@@ -526,6 +644,15 @@ def element_config(settings):
         "setting_defaults": {"UIFeature.registration": False},
         "show_labs_settings": False,
     }
+    if settings.get("element_call"):
+        # Element Web embeds Element Call; no separate Element Call app
+        config["features"] = {
+            "feature_group_calls": True,
+            "feature_video_rooms": True,
+            "feature_element_call_video_rooms": True,
+        }
+        config["element_call"] = {"use_exclusively": True, "participant_limit": 8, "brand": "Element Call"}
+    return config
 
 
 def cinny_config(settings):
@@ -543,6 +670,143 @@ def cinny_config(settings):
 def ketesa_config(settings):
     # Only the own homeserver can be administered from this instance
     return {"restrictBaseUrl": f"https://{settings['host']}"}
+
+
+# --- Calls ---------------------------------------------------------------------
+
+PRIVATE_PEERS = (
+    # Do not relay to the local networks of the node (RFC 1918, loopback,
+    # link-local, CGNAT, multicast, reserved): TURN users could reach
+    # internal services otherwise.
+    "0.0.0.0-0.255.255.255",
+    "10.0.0.0-10.255.255.255",
+    "100.64.0.0-100.127.255.255",
+    "127.0.0.0-127.255.255.255",
+    "169.254.0.0-169.254.255.255",
+    "172.16.0.0-172.31.255.255",
+    "192.0.0.0-192.0.0.255",
+    "192.168.0.0-192.168.255.255",
+    "198.18.0.0-198.19.255.255",
+    "224.0.0.0-255.255.255.255",
+    "::1",
+    "fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+    "fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+)
+
+
+def coturn_config(settings, udp_map):
+    """turnserver.conf: UDP only, credentials from the shared secret (the
+    same secret Synapse and LiveKit use for short-lived credentials)."""
+    lines = [
+        f"listening-port={udp_map['turn']}",
+        "no-tcp",
+        "no-tls",
+        "no-dtls",
+        f"min-port={udp_map['relay_first']}",
+        f"max-port={udp_map['relay_last']}",
+        "use-auth-secret",
+        f"static-auth-secret={settings['secrets']['turn_shared_secret']}",
+        f"realm={settings['server_name']}",
+        "fingerprint",
+        "no-cli",
+        "no-multicast-peers",
+        "no-software-attribute",
+        "stale-nonce=600",
+        "log-file=stdout",
+        "simple-log",
+        "pidfile=/tmp/turnserver.pid",
+    ]
+    if settings.get("calls_public_ip"):
+        lines.append(f"external-ip={settings['calls_public_ip']}")
+    lines += [f"denied-peer-ip={peer}" for peer in PRIVATE_PEERS]
+    return "\n".join(lines) + "\n"
+
+
+def livekit_config(settings, port_map, udp_map):
+    stored = settings["secrets"]
+    rtc = {
+        "tcp_port": port_map["livekit_tcp"],
+        "udp_port": udp_map["livekit"],
+    }
+    if settings.get("calls_public_ip"):
+        rtc["node_ip"] = settings["calls_public_ip"]
+        rtc["use_external_ip"] = False
+    else:
+        # Find the public address with STUN (servers behind NAT)
+        rtc["use_external_ip"] = True
+    if settings.get("turn"):
+        rtc["turn_servers"] = [{
+            "host": settings["host"],
+            "port": udp_map["turn"],
+            "protocol": "udp",
+            "secret": stored["turn_shared_secret"],
+        }]
+    return {
+        "port": port_map["livekit"],
+        # Signalling only through Traefik; the media ports bind everywhere
+        "bind_addresses": ["127.0.0.1"],
+        "rtc": rtc,
+        "room": {"auto_create": False},
+        "turn": {"enabled": False},
+        "keys": {stored["livekit_key"]: stored["livekit_secret"]},
+        # Lets the JWT service end call memberships of clients that vanish
+        "webhook": {
+            "api_key": stored["livekit_key"],
+            "urls": [f"http://127.0.0.1:{port_map['lk_jwt']}/sfu_webhook"],
+        },
+        "logging": {"level": "info", "pion_level": "error", "json": False},
+    }
+
+
+def lk_jwt_local_hosts(settings):
+    """Names the JWT service reaches through Traefik on this node: the
+    homeserver host (OpenID userinfo, LiveKit API) and the server name if
+    this module answers its /.well-known/matrix/server."""
+    hosts = [settings["host"]]
+    if delegated(settings) and serves_wellknown(settings):
+        hosts.append(settings["server_name"])
+    return hosts
+
+
+def lk_jwt_unit_env(settings):
+    # $LK_JWT_HOST_ARGS in lk-jwt.service: systemd splits it into words
+    args = " ".join(f"--add-host={host}:127.0.0.1" for host in lk_jwt_local_hosts(settings))
+    return {"LK_JWT_HOST_ARGS": args}
+
+
+def lk_jwt_env(settings, port_map):
+    stored = settings["secrets"]
+    env = {
+        "LIVEKIT_JWT_BIND": f"127.0.0.1:{port_map['lk_jwt']}",
+        "LIVEKIT_URL": f"wss://{settings['host']}{LIVEKIT_PATH}",
+        "LIVEKIT_KEY": stored["livekit_key"],
+        "LIVEKIT_SECRET": stored["livekit_secret"],
+        # Only users of this server may start calls
+        "LIVEKIT_FULL_ACCESS_HOMESERVERS": settings["server_name"],
+        # Check OpenID tokens with the local Synapse directly, also without
+        # federation or public DNS
+        "LIVEKIT_CS_API_URL_OVERRIDES": f"{settings['server_name']}=http://127.0.0.1:{port_map['synapse']}",
+        "LIVEKIT_SANITY_CHECK_INTERVAL_SECONDS": "30",
+    }
+    if not settings["lets_encrypt"]:
+        # Traefik has a self-signed certificate; the local names above go
+        # to 127.0.0.1, so the unverified connections stay on the node
+        env["LIVEKIT_INSECURE_SKIP_VERIFY_TLS"] = "YES_I_KNOW_WHAT_I_AM_DOING"
+    return env
+
+
+def firewall_ports(settings, port_map, udp_map):
+    """Ports that clients and other TURN/WebRTC peers must reach directly."""
+    ports = []
+    if not udp_map:
+        return ports
+    if settings.get("turn"):
+        ports.append(f"{udp_map['turn']}/udp")
+        ports.append(f"{udp_map['relay_first']}-{udp_map['relay_last']}/udp")
+    if settings.get("element_call"):
+        ports.append(f"{udp_map['livekit']}/udp")
+        ports.append(f"{port_map['livekit_tcp']}/tcp")
+    return ports
 
 
 # --- Bridges -----------------------------------------------------------------
@@ -642,7 +906,7 @@ def urls(settings):
     }
 
 
-def configuration(settings, domains, admin_ready):
+def configuration(settings, domains, admin_ready, port_map=None, udp_map=None):
     """Output of get-configuration."""
     result = {key: settings.get(key, value) for key, value in DEFAULTS.items() if key != "telegram_api_hash"}
     result["telegram_api_hash_set"] = bool(settings.get("telegram_api_hash"))
@@ -654,6 +918,7 @@ def configuration(settings, domains, admin_ready):
     documents = wellknown_documents(settings) if settings.get("host") and delegated(settings) else {}
     result["wellknown_server"] = json.dumps(documents["server"]) if documents else ""
     result["wellknown_client"] = json.dumps(documents["client"]) if documents else ""
+    result["calls_ports"] = firewall_ports(settings, port_map, udp_map) if port_map and udp_map else []
     result["admin_user"] = user_id(ADMIN_LOCALPART, settings["server_name"]) if settings.get("server_name") else ""
     result["admin_password"] = settings.get("secrets", {}).get("admin_password", "") if admin_ready else ""
     result.update(urls(settings))

@@ -17,5 +17,8 @@ if traefik is None:
     print("Default Traefik instance of this node not found", file=sys.stderr)
     sys.exit(2)
 
-for name in ("synapse", "element", "cinny", "ketesa", "wellknown"):
+for name in ("synapse", "element", "cinny", "ketesa", "wellknown", "livekit", "lkjwt"):
     agent.tasks.run(agent_id=traefik, action="delete-route", data={"instance": os.environ["MODULE_ID"] + "-" + name})
+
+# TURN and LiveKit ports; fails harmlessly if calls were never enabled
+agent.remove_public_service(os.environ["MODULE_ID"])

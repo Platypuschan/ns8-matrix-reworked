@@ -1,0 +1,38 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# coturn TURN server for calls (classic 1:1 calls and Element Call through
+# LiveKit). It runs in the host network namespace on the module's UDP ports
+# (state/calls/turnserver.conf) and as root of the rootless container, i.e.
+# as the module user, so it can read its private configuration.
+#
+
+[Unit]
+Description=coturn TURN server for Matrix calls
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+WorkingDirectory=%E/state
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30
+ExecStartPre=/bin/rm -f %t/coturn.pid %t/coturn.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/coturn.pid \
+    --cidfile %t/coturn.ctr-id --cgroups=no-conmon \
+    --replace -d --name coturn \
+    --network=host \
+    --user=0:0 \
+    --volume %E/state/calls/turnserver.conf:/etc/coturn/turnserver.conf:ro,Z \
+    ${COTURN_IMAGE} \
+    -c /etc/coturn/turnserver.conf
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/coturn.ctr-id -t 10
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/coturn.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/coturn.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

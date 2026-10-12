@@ -1,0 +1,43 @@
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+#
+# LiveKit JWT service: gives Element Call clients a LiveKit token after
+# checking their Matrix OpenID token with Synapse (/livekit/jwt on the
+# homeserver host, through Traefik). It verifies tokens over the federation
+# API of the server name; --add-host sends the module's own names straight
+# to Traefik on this node (no hairpin NAT, no external DNS needed).
+#
+
+[Unit]
+Description=LiveKit JWT service for Element Call
+After=livekit.service
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+EnvironmentFile=%E/state/environment
+EnvironmentFile=%E/state/calls/lk-jwt-unit.env
+WorkingDirectory=%E/state
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30
+ExecStartPre=/bin/rm -f %t/lk-jwt.pid %t/lk-jwt.ctr-id
+ExecStart=/usr/bin/podman run --conmon-pidfile %t/lk-jwt.pid \
+    --cidfile %t/lk-jwt.ctr-id --cgroups=no-conmon \
+    --replace -d --name lk-jwt \
+    --network=host \
+    $LK_JWT_HOST_ARGS \
+    --env-file=%E/state/calls/lk-jwt.env \
+    ${LK_JWT_SERVICE_IMAGE}
+# The service runs as PID 1 of the container and ignores SIGTERM: podman
+# kills it after the timeout, which is a normal stop here
+ExecStop=/usr/bin/podman stop --ignore --cidfile %t/lk-jwt.ctr-id -t 3
+SuccessExitStatus=137 143
+ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/lk-jwt.ctr-id
+SyslogIdentifier=%u
+PIDFile=%t/lk-jwt.pid
+Type=forking
+
+[Install]
+WantedBy=default.target

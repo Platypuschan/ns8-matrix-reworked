@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Open the TURN and LiveKit media ports in the node firewall, or close them.
+
+import os
+import sys
+
+import agent
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_setup
+
+settings = matrix_setup.read_settings()
+ports = matrix_setup.firewall_ports(settings, matrix_setup.ports(), matrix_setup.udp_ports())
+if ports:
+    agent.assert_exp(
+        agent.add_public_service(os.environ["MODULE_ID"], ports, replace_ports=True),
+        "Firewall service configuration has failed",
+    )
+else:
+    # Nothing to remove when calls were never enabled
+    agent.remove_public_service(os.environ["MODULE_ID"])

@@ -72,7 +72,15 @@
     "invalid_number": "Muss eine Zahl zwischen 1 und 10240 sein",
     "unknown_bridge": "Unbekannte Bridge",
     "host_format": "Muss ein gültiger vollqualifizierter Domainname sein",
-    "host_pattern": "Muss ein gültiger vollqualifizierter Domainname sein"
+    "host_pattern": "Muss ein gültiger vollqualifizierter Domainname sein",
+    "calls_title": "Anrufe",
+    "calls_description": "Element Call führt Gruppen- und Einzelvideoanrufe in Element Web, Element Desktop und Element X über einen LiveKit-Medienserver auf diesem Knoten. Der TURN-Server (coturn) hilft Clients hinter strengem NAT und Firewalls, bei klassischen 1:1-Anrufen und bei Element Call. Beide brauchen Ports, die Clients direkt erreichen; das Modul öffnet sie in der Firewall des Knotens. Hinter einem Router diese Ports an den Knoten weiterleiten.",
+    "element_call": "Element Call (MatrixRTC mit LiveKit)",
+    "turn": "TURN-Server (coturn, UDP)",
+    "calls_public_ip": "Öffentliche IP-Adresse (optional)",
+    "calls_public_ip_helper": "Die Adresse, unter der Clients im Internet diesen Knoten erreichen, falls er hinter NAT steht. Leer: LiveKit ermittelt sie per STUN, coturn nennt die eigenen Adressen des Knotens.",
+    "calls_ports_description": "Diese Ports öffnen bzw. an den Knoten weiterleiten:",
+    "invalid_ip_address": "Muss eine öffentliche IPv4- oder IPv6-Adresse sein"
   },
   "common": {
     "required": "erforderlich",

@@ -30,6 +30,9 @@ module_images=(
 	ghcr.io/element-hq/element-web:v1.12.30
 	ghcr.io/cinnyapp/cinny:v4.12.7
 	ghcr.io/etkecc/ketesa:v1.5.1
+	docker.io/coturn/coturn:4.18.0-alpine
+	docker.io/livekit/livekit-server:v1.13.7
+	ghcr.io/element-hq/lk-jwt-service:0.7.0
 )
 
 # Create a new empty container image
@@ -50,14 +53,18 @@ buildah run \
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot
 buildah add "${container}" ui/dist /ui
-# 20 TCP ports: Synapse, PostgreSQL, three web apps and ten bridges, with
-# spare ports for later services (see PORT_NAMES in matrix_setup.py).
+# 20 TCP ports: Synapse, PostgreSQL, three web apps, ten bridges, the
+# well-known service and three for Element Call (see PORT_NAMES in
+# matrix_setup.py). 64 UDP ports for coturn and LiveKit (UDP_PORTS_DEMAND).
+# node:fwadm opens the call ports; node:portsadm lets instances installed
+# before 0.2.0 allocate their UDP ports.
 # IMAGETAG overrides the published module tag (latest by default).
 buildah config --entrypoint=/ \
 	--label="org.opencontainers.image.source=${repository_source}" \
 	--label="org.opencontainers.image.revision=${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}" \
-	--label="org.nethserver.authorizations=traefik@node:routeadm cluster:accountconsumer" \
+	--label="org.nethserver.authorizations=traefik@node:routeadm cluster:accountconsumer node:fwadm,portsadm" \
 	--label="org.nethserver.tcp-ports-demand=20" \
+	--label="org.nethserver.udp-ports-demand=64" \
 	--label="org.nethserver.rootfull=0" \
 	--label="org.nethserver.images=${module_images[*]}" \
 	"${container}"

@@ -81,7 +81,15 @@
     "invalid_number": "Must be a number between 1 and 10240",
     "unknown_bridge": "Unknown bridge",
     "host_format": "Must be a valid fully qualified domain name",
-    "host_pattern": "Must be a valid fully qualified domain name"
+    "host_pattern": "Must be a valid fully qualified domain name",
+    "calls_title": "Calls",
+    "calls_description": "Element Call runs group and 1:1 video calls in Element Web, Element Desktop and Element X through a LiveKit media server on this node. The TURN server (coturn) helps clients behind strict NAT and firewalls, for classic 1:1 calls and for Element Call. Both need ports that clients reach directly; the module opens them in the node firewall. Behind a router, forward them to this node.",
+    "element_call": "Element Call (MatrixRTC with LiveKit)",
+    "turn": "TURN server (coturn, UDP)",
+    "calls_public_ip": "Public IP address (optional)",
+    "calls_public_ip_helper": "The address clients on the internet reach this node at, if it is behind NAT. Empty: LiveKit finds it with STUN, coturn announces the node's own addresses.",
+    "calls_ports_description": "Open or forward these ports to this node:",
+    "invalid_ip_address": "Must be a public IPv4 or IPv6 address"
   },
   "about": {
     "title": "About"
