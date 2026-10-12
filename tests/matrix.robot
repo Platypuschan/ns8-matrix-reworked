@@ -270,11 +270,11 @@ Shared-secret login works
     # the suite used up the rate limit of 127.0.0.1
     ${port} =    Execute Command    runagent -m ${module_id} sh -c '. ./ports.env; echo $SYNAPSE_PORT'
     ${direct} =    Set Variable    python3 /root/matrix_client.py --host ${HOST} --direct-port ${port}
-    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.21 ssa-login @user1:${SERVER_NAME} ${config.shared_secret_auth_secret}
+    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.21 ssa-login -- @user1:${SERVER_NAME} ${config.shared_secret_auth_secret}
     ...    return_rc=True
     Should Be Equal As Integers    ${rc}    0    shared-secret login failed: ${output}
     Should Contain    ${output}    "user_id": "@user1:${SERVER_NAME}"
-    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.22 ssa-login @user1:${SERVER_NAME} wrong-secret 2>&1
+    ${output}    ${rc} =    Execute Command    ${direct} --forwarded-for 198.51.100.22 ssa-login -- @user1:${SERVER_NAME} wrong-secret 2>&1
     ...    return_rc=True
     Should Not Be Equal As Integers    ${rc}    0    a wrong shared secret was accepted
     Should Contain    ${output}    M_FORBIDDEN

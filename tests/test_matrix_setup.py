@@ -45,6 +45,7 @@ class SettingsTest(StateTest):
         self.assertEqual(first["secrets"], second["secrets"])
         self.assertEqual(self.mode(matrix_setup.SETTINGS), 0o600)
         self.assertRegex(first["secrets"]["admin_password"], r"^[A-Za-z0-9]{20}$")
+        self.assertRegex(first["secrets"]["shared_secret_auth_secret"], r"^[A-Za-z0-9]{48}$")
 
     def test_missing_fields_keep_their_value(self):
         self.apply(element_host="chat.example.org", draupnir=True, max_upload_mb=20)

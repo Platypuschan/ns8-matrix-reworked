@@ -234,6 +234,9 @@ def ensure_settings(state_dir="."):
         if not stored.get(key):
             if key == "admin_password":
                 stored[key] = new_password()
+            elif key == "shared_secret_auth_secret":
+                # Shown in the UI and pasted into other tools
+                stored[key] = new_password(48)
             elif key == "livekit_key":
                 # An API key name, sent in clear in LiveKit tokens
                 stored[key] = "lk" + new_password(14)
