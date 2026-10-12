@@ -63,12 +63,7 @@
     "ketesa_host": "Ketesa admin UI host name",
     "ketesa_placeholder": "matrix-admin.example.org",
     "bridges_title": "Bridges",
-    "bridges_description": "mautrix bridges connect Matrix with other chat networks. Users of this server start a chat with the bridge bot (for example @whatsappbot) and log in to their account there. A bridge image is downloaded when the bridge is enabled for the first time, which can take a minute.",
-    "telegram_description": "The Telegram bridge needs an API ID and API hash from https://my.telegram.org/apps.",
-    "telegram_api_id": "Telegram API ID",
-    "telegram_api_hash": "Telegram API hash",
-    "telegram_api_hash_set": "A hash is stored; leave empty to keep it.",
-    "telegram_credentials_required": "Required for the Telegram bridge",
+    "bridges_description": "Bridges are separate modules (matrix-whatsapp, matrix-signal, matrix-telegram, matrix-discord, matrix-steam, matrix-heisenbridge). Install them from the Software Center on this node; they register here automatically. Registered bridges:",
     "advanced": "Advanced",
     "mail_from": "Sender address of notification mails",
     "mail_from_helper": "Mails are sent through the cluster smarthost, if it is enabled. Empty uses noreply@<server name>.",
@@ -79,7 +74,6 @@
     "server_name_immutable": "The server name cannot be changed",
     "invalid_email": "Must be a valid email address",
     "invalid_number": "Must be a number between 1 and 10240",
-    "unknown_bridge": "Unknown bridge",
     "host_format": "Must be a valid fully qualified domain name",
     "host_pattern": "Must be a valid fully qualified domain name",
     "calls_title": "Calls",
@@ -90,9 +84,6 @@
     "calls_public_ip_helper": "The address clients on the internet reach this node at, if it is behind NAT. Empty: LiveKit finds it with STUN, coturn announces the node's own addresses.",
     "calls_ports_description": "Open or forward these ports to this node:",
     "invalid_ip_address": "Must be a public IPv4 or IPv6 address",
-    "heisenbridge_owner": "Heisenbridge owner (optional)",
-    "heisenbridge_owner_helper": "Matrix ID that administers the IRC bridge, like @alice:example.org. Empty: the first local user who writes to @heisenbridge becomes the owner. The owner can allow other users.",
-    "invalid_user_id": "Must be a Matrix user ID, like @alice:example.org",
     "maintenance_title": "Moderation and maintenance",
     "draupnir": "Draupnir moderation bot",
     "draupnir_helper": "The module creates the bot account @draupnir and a management room for the server admin. Invite @draupnir to the rooms it should protect; ban lists and protections are managed with !draupnir commands in the management room.",
@@ -101,7 +92,8 @@
     "state_compressor_helper": "synapse_auto_compressor shrinks the largest table of the Synapse database while Synapse keeps running.",
     "shared_secret_auth": "Shared-secret login (matrix-synapse-shared-secret-auth)",
     "shared_secret_auth_helper": "Trusted tools that know the secret below can log in as any local user. Keep it secret.",
-    "shared_secret_auth_secret": "Shared secret"
+    "shared_secret_auth_secret": "Shared secret",
+    "no_bridges": "No bridge module is registered."
   },
   "about": {
     "title": "About"

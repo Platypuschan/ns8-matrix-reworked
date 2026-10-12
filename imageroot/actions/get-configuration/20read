@@ -28,6 +28,7 @@ json.dump(
         settings, domains, os.path.exists("admin-created"),
         port_map=matrix_setup.ports(), udp_map=matrix_setup.udp_ports(),
         draupnir_room=matrix_runtime.read_draupnir_state().get("management_room", ""),
+        appservices=matrix_runtime.read_appservices(),
     ),
     fp=sys.stdout,
 )

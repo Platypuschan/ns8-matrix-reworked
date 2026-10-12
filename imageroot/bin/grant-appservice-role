@@ -1,0 +1,11 @@
+#!/bin/bash
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Role for bridge modules: their image asks for it with
+# org.nethserver.authorizations=matrix-reworked@node:appserviceadm
+set -e
+exec 1>&2
+redis-exec SADD "${AGENT_ID}/roles/appserviceadm" add-appservice remove-appservice get-matrix-info

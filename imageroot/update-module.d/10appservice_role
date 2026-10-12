@@ -1,0 +1,8 @@
+#!/bin/bash
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Instances installed before 0.3.0 have no appserviceadm role yet
+exec grant-appservice-role

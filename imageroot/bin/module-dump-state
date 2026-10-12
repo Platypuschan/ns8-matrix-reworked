@@ -5,7 +5,7 @@
 #
 
 # Called by NS8 before Restic runs: dump all PostgreSQL databases (Synapse
-# and the bridges) while they keep running.
+# and the bridges built in before 0.3.0) while they keep running.
 
 set -euo pipefail
 

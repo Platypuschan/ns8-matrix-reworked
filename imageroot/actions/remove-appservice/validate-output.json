@@ -1,0 +1,19 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Appservice removal result",
+    "$id": "http://nethserver.org/json-schema/task/output/matrix-reworked/remove-appservice",
+    "examples": [
+        {
+            "removed": true
+        }
+    ],
+    "type": "object",
+    "required": [
+        "removed"
+    ],
+    "properties": {
+        "removed": {
+            "type": "boolean"
+        }
+    }
+}

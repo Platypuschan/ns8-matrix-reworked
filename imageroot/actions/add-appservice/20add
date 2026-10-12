@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
+# Register (or update) the appservice of a bridge module and restart
+# Synapse if the registration changed. Bridge modules call it with the role
+# appserviceadm; the output tells them how to reach the homeserver.
+
+import json
+import os
+import subprocess
+import sys
+
+import agent
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "pypkg"))
+import matrix_runtime
+import matrix_setup
+
+data = json.load(sys.stdin)
+# "module/matrix-whatsapp1" for a module; a cluster admin may name the owner
+caller = os.environ.get("AGENT_TASK_USER", "")
+owner = caller.removeprefix("module/") if caller.startswith("module/") else (data.get("module") or "cluster-admin")
+
+with matrix_setup.settings_lock():
+    settings = matrix_setup.ensure_settings()
+    if not settings.get("host"):
+        agent.set_status("validation-failed")
+        json.dump([{"field": "registration", "parameter": "registration", "value": "",
+                    "error": "homeserver_not_configured"}], fp=sys.stdout)
+        sys.exit(2)
+    before = matrix_runtime.read_appservices().get(str(data["registration"].get("id", "")))
+    try:
+        registration = matrix_runtime.add_appservice(owner, data["registration"])
+    except matrix_setup.SettingsError as error:
+        agent.set_status("validation-failed")
+        json.dump([{"field": error.field, "parameter": error.field, "value": error.value,
+                    "error": error.error}], fp=sys.stdout)
+        sys.exit(2)
+    changed = before is None or before["registration"] != registration or before["module"] != owner
+
+port_map = matrix_setup.ports()
+if changed and subprocess.run(["systemctl", "--user", "is-active", "--quiet", "synapse.service"]).returncode == 0:
+    # render-synapse-config (ExecStartPre) writes the new registration list
+    subprocess.run(["systemctl", "--user", "restart", "synapse.service"], check=True)
+    matrix_runtime.wait_for_synapse(port_map["synapse"])
+print(f"Appservice {registration['id']} of {owner}: {'registered' if changed else 'unchanged'}", file=sys.stderr)
+json.dump(matrix_setup.matrix_info(settings, port_map), fp=sys.stdout)

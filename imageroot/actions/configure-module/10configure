@@ -5,7 +5,7 @@
 #
 
 # Validate and store the settings, bind the user domain and write the
-# configuration of Synapse, the web apps and the enabled bridges.
+# configuration of Synapse, the web apps and the call services.
 
 import json
 import os

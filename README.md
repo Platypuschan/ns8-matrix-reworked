@@ -8,9 +8,10 @@ A [NethServer 8](https://github.com/NethServer/ns8-core) module for a complete
   or local accounts only
 - web apps, each on its own host name and optional: **Element Web**, **Cinny**
   and the **Ketesa** Synapse admin UI (formerly synapse-admin)
-- **bridges**, each enabled with one switch: WhatsApp, Signal, Telegram and
-  Discord (mautrix, with double puppeting and end-to-bridge encryption
-  allowed), Steam (matrix-steam-bridge) and IRC (Heisenbridge)
+- an **appservice API for bridge modules**: the bridges (WhatsApp, Signal,
+  Telegram, Discord, Steam, IRC) are NS8 modules of their own from
+  [ns8-matrix-bridges](https://github.com/Platypuschan/ns8-matrix-bridges)
+  and register with this module
 - **Draupnir** moderation bot with its own management room
 - nightly **synapse_auto_compressor** run against the room state tables
 - optional **matrix-synapse-shared-secret-auth** login for trusted tools
@@ -19,7 +20,7 @@ A [NethServer 8](https://github.com/NethServer/ns8-core) module for a complete
 - **server name delegation** (user IDs `@alice:example.org` with the homeserver
   on `matrix.example.org`), optionally served by the module
 - notification mails through the cluster smarthost
-- backup and restore of the databases, bridge state and media
+- backup and restore of the database, settings, bridge registrations and media
 
 It builds on ideas of [NethServer/ns8-matrix](https://github.com/NethServer/ns8-matrix)
 (a proof of concept) and [matrix-docker-ansible-deploy](https://github.com/spantaleev/matrix-docker-ansible-deploy).
@@ -42,8 +43,7 @@ Open the module in the cluster admin UI, or use `configure-module`:
       "federation": true,
       "element_host": "chat.example.org",
       "cinny_host": "",
-      "ketesa_host": "matrix-admin.example.org",
-      "bridges": ["whatsapp", "signal"]
+      "ketesa_host": "matrix-admin.example.org"
     }'
 
 | Field | Meaning |
@@ -55,12 +55,9 @@ Open the module in the cluster admin UI, or use `configure-module`:
 | `user_domain` | NS8 user domain whose users log in with their password. Empty: local accounts only. |
 | `federation` | Talk to other Matrix servers. |
 | `element_host`, `cinny_host`, `ketesa_host` | Host name of each web app; empty disables it. |
-| `bridges` | Enabled bridges: `whatsapp`, `signal`, `telegram`, `discord`, `steam`, `heisenbridge`. |
-| `heisenbridge_owner` | Matrix ID that owns Heisenbridge; empty: the first local user who talks to it. |
 | `draupnir` | Run the Draupnir moderation bot. |
 | `state_compressor` | Compress the Synapse room state tables every night (default on). |
 | `shared_secret_auth` | Load matrix-synapse-shared-secret-auth; the secret is shown in the Settings page. |
-| `telegram_api_id`, `telegram_api_hash` | Required for the Telegram bridge, from <https://my.telegram.org/apps>. An empty hash keeps the stored one. |
 | `mail_from` | Sender of notification mails (default `noreply@<server_name>`). |
 | `max_upload_mb` | Maximum upload size, default 100. |
 | `element_call` | Element Call backend: LiveKit SFU and LiveKit JWT service below `https://<host>/livekit/`. |
@@ -84,31 +81,29 @@ in Ketesa).
 
 ### Bridges
 
-All users of the server can use the enabled bridges: start a chat with the bridge
-bot (`@whatsappbot`, `@signalbot`, `@telegrambot`, `@discordbot`, `@steambot`) and send `login`. The admin
-account has bridge admin rights.
+Bridges are NS8 modules of their own (built from
+[ns8-matrix-bridges](https://github.com/Platypuschan/ns8-matrix-bridges)):
+install them on the node of this module. Each one registers its appservice
+here and gets the homeserver details back; the Settings page lists the
+registered bridges.
 
-A bridge image is pulled the first time the bridge is enabled. Each bridge keeps
-its configuration in `state/bridges/<bridge>/config.yaml`. The module sets only
-the addresses, ports, database, permissions, double puppeting, encryption
-permission and logging there; other options can be edited in that file and
-are kept (restart the bridge with `runagent -m <module> systemctl --user restart bridge@<bridge>`).
-Disabling a bridge stops it and removes it from Synapse; its configuration and
-database are kept for a later re-enable.
+The API for bridge modules (role `appserviceadm`; a bridge module image asks
+for it with `org.nethserver.authorizations=matrix-reworked@node:appserviceadm`):
 
-**Steam** (matrix-steam-bridge) starts a SteamKit helper that always listens
-on port 50051 without authentication. The module therefore runs this bridge
-in its own network namespace (pasta, with the host loopback mapped to
-169.254.1.3) and publishes only its appservice port on 127.0.0.1.
+| Action | Purpose |
+| --- | --- |
+| `add-appservice` | Register or update `{"registration": {...}}` (an appservice registration). The URL must be `http://127.0.0.1:<port>` (same node), IDs and tokens must be unique, and exclusive user namespaces must not cover the users of the server. Synapse restarts if the registration changed. Output: the homeserver details below. |
+| `remove-appservice` | Remove `{"id": ...}`; a module can remove only its own registrations. |
+| `get-matrix-info` | `server_name`, `homeserver_url` (`http://127.0.0.1:<port>`), `public_url`, `federation`, `admin_user`, `double_puppet_secret` (`as_token:...` for mautrix double puppeting), `api_version`. |
 
-**IRC** (Heisenbridge) is a bouncer: write to `@heisenbridge`, then use
-`ADDNETWORK`, `OPEN` and `JOIN` to connect to IRC networks of your choice.
-Its owner (see `heisenbridge_owner`) can allow more users.
+After each configuration and update the module publishes the event
+`matrix-changed`, so bridge modules read `get-matrix-info` again (the
+Synapse port changes with a restore). The registrations are part of the
+backup (`state/appservices.json`).
 
-Releases before 0.3.0 also had bridges for Messenger/Instagram, Google
-Messages, Slack, Bluesky, X and LinkedIn. An update stops them and removes
-them from Synapse; their `state/bridges/<bridge>` directory and
-`mautrix_<bridge>` database are kept.
+Releases before 0.3.0 had built-in bridges. The update stops them and removes
+them from Synapse; their `state/bridges/<bridge>` directories and databases
+are kept, but are not migrated: set the bridges up again as modules.
 
 ### Draupnir
 
@@ -162,11 +157,10 @@ All containers run rootless as the module user:
 
 | Unit | Content |
 | --- | --- |
-| `postgresql.service` | PostgreSQL 17, databases `synapse` and `mautrix_<bridge>` |
+| `postgresql.service` | PostgreSQL 17 for Synapse |
 | `synapse.service` | Synapse, configuration rendered into `state/synapse/` |
 | `element.service`, `cinny.service`, `ketesa.service` | web apps |
 | `wellknown.service` | `/.well-known/matrix` for a delegated server name |
-| `bridge@<bridge>.service` | one bridge |
 | `draupnir.service` | Draupnir moderation bot |
 | `synapse-compressor.timer` | nightly synapse_auto_compressor run |
 | `coturn.service` | coturn TURN server |
@@ -175,7 +169,7 @@ All containers run rootless as the module user:
 ## Backup and restore
 
 `module-dump-state` writes all databases with `pg_dumpall`. The backup contains
-the settings (`state/matrix.json`), the dump, the bridge configurations and the
+the settings (`state/matrix.json`), the dump, the bridge registrations and the
 `synapse-data` volume (media and the server signing key). Restore loads the dump
 into a new database volume and configures the module with the stored settings.
 

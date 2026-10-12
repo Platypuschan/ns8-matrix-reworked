@@ -17,21 +17,9 @@
             "ketesa_host": "",
             "mail_from": "",
             "max_upload_mb": 100,
-            "bridges": [
-                "whatsapp"
-            ],
-            "telegram_api_id": "",
-            "telegram_api_hash_set": false,
             "configured": true,
             "user_domains": [
                 "ad.example.org"
-            ],
-            "available_bridges": [
-                {
-                    "id": "whatsapp",
-                    "name": "WhatsApp",
-                    "image": "dock.mau.dev/mautrix/whatsapp:v0.2609.0"
-                }
             ],
             "wellknown_server": "{\"m.server\": \"matrix.example.org:443\"}",
             "wellknown_client": "{\"m.homeserver\": {\"base_url\": \"https://matrix.example.org\"}}",
@@ -50,12 +38,17 @@
                 "40001/udp",
                 "20019/tcp"
             ],
-            "heisenbridge_owner": "",
             "draupnir": true,
             "state_compressor": true,
             "shared_secret_auth": false,
             "draupnir_management_room": "!abc:example.org",
-            "shared_secret_auth_secret": ""
+            "shared_secret_auth_secret": "",
+            "appservices": [
+                {
+                    "id": "whatsapp",
+                    "module": "matrix-whatsapp1"
+                }
+            ]
         }
     ],
     "type": "object",
@@ -72,12 +65,8 @@
         "ketesa_host",
         "mail_from",
         "max_upload_mb",
-        "bridges",
-        "telegram_api_id",
-        "telegram_api_hash_set",
         "configured",
         "user_domains",
-        "available_bridges",
         "wellknown_server",
         "wellknown_client",
         "admin_user",
@@ -90,12 +79,12 @@
         "element_call",
         "calls_public_ip",
         "calls_ports",
-        "heisenbridge_owner",
         "draupnir",
         "state_compressor",
         "shared_secret_auth",
         "draupnir_management_room",
-        "shared_secret_auth_secret"
+        "shared_secret_auth_secret",
+        "appservices"
     ],
     "properties": {
         "server_name": {
@@ -135,19 +124,6 @@
         "max_upload_mb": {
             "type": "integer"
         },
-        "bridges": {
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
-        },
-        "telegram_api_id": {
-            "type": "string"
-        },
-        "telegram_api_hash_set": {
-            "type": "boolean",
-            "description": "A Telegram API hash is stored (it is never returned)"
-        },
         "configured": {
             "type": "boolean"
         },
@@ -157,28 +133,6 @@
                 "type": "string"
             },
             "description": "User domains of the cluster"
-        },
-        "available_bridges": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": [
-                    "id",
-                    "name",
-                    "image"
-                ],
-                "properties": {
-                    "id": {
-                        "type": "string"
-                    },
-                    "name": {
-                        "type": "string"
-                    },
-                    "image": {
-                        "type": "string"
-                    }
-                }
-            }
         },
         "wellknown_server": {
             "type": "string",
@@ -224,9 +178,6 @@
             },
             "description": "Ports to open/forward for calls, like 40001/udp or 40002-40063/udp"
         },
-        "heisenbridge_owner": {
-            "type": "string"
-        },
         "draupnir": {
             "type": "boolean"
         },
@@ -243,6 +194,25 @@
         "shared_secret_auth_secret": {
             "type": "string",
             "description": "The shared secret of shared-secret-auth; empty while it is off"
+        },
+        "appservices": {
+            "type": "array",
+            "description": "Appservices registered by bridge modules",
+            "items": {
+                "type": "object",
+                "required": [
+                    "id",
+                    "module"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "module": {
+                        "type": "string"
+                    }
+                }
+            }
         }
     }
 }

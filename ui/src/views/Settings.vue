@@ -232,63 +232,14 @@
             <p class="mg-bottom helper">
               {{ $t("settings.bridges_description") }}
             </p>
-            <div class="bridges mg-bottom">
-              <cv-checkbox
-                v-for="bridge in availableBridges"
-                :key="bridge.id"
-                :id="'bridge-' + bridge.id"
-                :value="bridge.id"
-                :label="bridge.name"
-                v-model="bridgeEnabled[bridge.id]"
-                :disabled="busy"
-              />
-            </div>
-            <NsInlineNotification
-              v-if="error.bridges"
-              kind="error"
-              :title="$t('settings.' + error.bridges)"
-              :showCloseButton="false"
-            />
-            <cv-text-input
-              v-if="bridgeEnabled.heisenbridge"
-              id="heisenbridge-owner"
-              :label="$t('settings.heisenbridge_owner')"
-              :helper-text="$t('settings.heisenbridge_owner_helper')"
-              placeholder="@alice:example.org"
-              v-model.trim="heisenbridgeOwner"
-              class="mg-bottom"
-              :invalid-message="$t(error.heisenbridge_owner)"
-              :disabled="busy"
-              ref="heisenbridge_owner"
-            />
-            <template v-if="bridgeEnabled.telegram">
-              <p class="mg-bottom helper">
-                {{ $t("settings.telegram_description") }}
-              </p>
-              <cv-text-input
-                id="telegram-api-id"
-                :label="$t('settings.telegram_api_id')"
-                v-model.trim="telegramApiId"
-                class="mg-bottom"
-                :invalid-message="$t(error.telegram_api_id)"
-                :disabled="busy"
-                ref="telegram_api_id"
-              />
-              <cv-text-input
-                id="telegram-api-hash"
-                :label="$t('settings.telegram_api_hash')"
-                :helper-text="
-                  telegramApiHashSet ? $t('settings.telegram_api_hash_set') : ''
-                "
-                v-model.trim="telegramApiHash"
-                type="password"
-                autocomplete="off"
-                class="mg-bottom"
-                :invalid-message="$t(error.telegram_api_hash)"
-                :disabled="busy"
-                ref="telegram_api_hash"
-              />
-            </template>
+            <ul v-if="appservices.length" id="appservices" class="mg-bottom">
+              <li v-for="item in appservices" :key="item.id">
+                <strong>{{ item.id }}</strong> ({{ item.module }})
+              </li>
+            </ul>
+            <p v-else class="mg-bottom helper">
+              {{ $t("settings.no_bridges") }}
+            </p>
             <!-- calls -->
             <h4 class="mg-top mg-bottom-sm">
               {{ $t("settings.calls_title") }}
@@ -515,16 +466,11 @@ export default {
       userDomain: "",
       userDomains: [],
       appHosts: { element: "", cinny: "", ketesa: "" },
-      availableBridges: [],
-      bridgeEnabled: {},
-      telegramApiId: "",
-      telegramApiHash: "",
-      telegramApiHashSet: false,
+      appservices: [],
       turn: false,
       elementCall: false,
       callsPublicIp: "",
       callsPorts: [],
-      heisenbridgeOwner: "",
       draupnir: false,
       draupnirManagementRoom: "",
       stateCompressor: true,
@@ -553,11 +499,8 @@ export default {
         cinny_host: "",
         ketesa_host: "",
         bridges: "",
-        telegram_api_id: "",
-        telegram_api_hash: "",
         mail_from: "",
         calls_public_ip: "",
-        heisenbridge_owner: "",
         max_upload_mb: "",
       },
     };
@@ -664,16 +607,7 @@ export default {
         cinny: config.cinny_host,
         ketesa: config.ketesa_host,
       };
-      this.availableBridges = config.available_bridges;
-      const enabled = {};
-      for (const bridge of config.available_bridges) {
-        enabled[bridge.id] = config.bridges.includes(bridge.id);
-      }
-      this.bridgeEnabled = enabled;
-      this.telegramApiId = config.telegram_api_id;
-      this.telegramApiHash = "";
-      this.telegramApiHashSet = config.telegram_api_hash_set;
-      this.heisenbridgeOwner = config.heisenbridge_owner;
+      this.appservices = config.appservices;
       this.draupnir = config.draupnir;
       this.draupnirManagementRoom = config.draupnir_management_room;
       this.stateCompressor = config.state_compressor;
@@ -707,14 +641,6 @@ export default {
       };
       if (!this.host) {
         invalid("host", "common.required");
-      }
-      if (this.bridgeEnabled.telegram) {
-        if (!this.telegramApiId) {
-          invalid("telegram_api_id", "common.required");
-        }
-        if (!this.telegramApiHash && !this.telegramApiHashSet) {
-          invalid("telegram_api_hash", "common.required");
-        }
       }
       if (firstInvalid) {
         this.$nextTick(() => this.focusElement(firstInvalid));
@@ -753,15 +679,9 @@ export default {
         element_host: this.appHosts.element,
         cinny_host: this.appHosts.cinny,
         ketesa_host: this.appHosts.ketesa,
-        bridges: this.availableBridges
-          .map((bridge) => bridge.id)
-          .filter((id) => this.bridgeEnabled[id]),
-        telegram_api_id: this.telegramApiId,
-        telegram_api_hash: this.telegramApiHash,
         turn: this.turn,
         element_call: this.elementCall,
         calls_public_ip: this.callsPublicIp,
-        heisenbridge_owner: this.heisenbridgeOwner,
         draupnir: this.draupnir,
         state_compressor: this.stateCompressor,
         shared_secret_auth: this.sharedSecretAuth,
@@ -828,9 +748,8 @@ export default {
   gap: $spacing-05;
 }
 
-.bridges {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
-  gap: $spacing-03;
+#appservices {
+  list-style: disc;
+  padding-left: $spacing-06;
 }
 </style>

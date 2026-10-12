@@ -3,6 +3,10 @@
 #
 
 #
+# LEGACY: bridges were built in before 0.3.0. This unit stays only so that
+# configure-module and the update can stop and disable them; bridges are
+# modules of their own now (ns8-matrix-bridges).
+#
 # Bridge %i. state/bridges/%i holds its configuration (mautrix bridges
 # complete and update it themselves) and registration; unit.env names the
 # image, binary, arguments and network (see bridge_unit_env() in

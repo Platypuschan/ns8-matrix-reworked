@@ -8,7 +8,7 @@
 # into state/synapse, mounted read-only. Synapse runs as root of the
 # rootless container, i.e. as the module user, so all its files stay
 # readable by the module agent and the backup. It shares the host network
-# namespace to reach PostgreSQL, the LDAP proxy and the bridges on
+# namespace to reach PostgreSQL, the LDAP proxy and the bridge modules on
 # 127.0.0.1. Extra Synapse modules (shared-secret-auth) come from
 # synapse-modules/ of the module image.
 #

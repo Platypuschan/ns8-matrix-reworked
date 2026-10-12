@@ -10,13 +10,12 @@ and renders every configuration file from them:
 - synapse/homeserver.yaml, synapse/log.config and synapse/appservices/*.yaml
   (JSON is valid YAML, so Synapse reads the JSON output directly),
 - web/element.json, web/cinny.json, web/ketesa.json for the web apps,
-- bridges/<key>/config.yaml, the configuration of each mautrix bridge.
+- calls/ for coturn, LiveKit and the LiveKit JWT service,
+- draupnir/config/production.yaml for the Draupnir bot.
 
-The bridges own most of their configuration: they complete a small seed
-file with their defaults and generated secrets on the first start, and keep
-it up to date when a new version adds options. The module only sets the
-keys it is responsible for (addresses, ports, database, permissions, ...)
-and leaves everything else as the bridge wrote it.
+Bridges are modules of their own. They register their appservice with the
+add-appservice action (state/appservices.json) and get the homeserver
+details from get-matrix-info.
 """
 
 import contextlib
@@ -33,7 +32,6 @@ SETTINGS = "matrix.json"
 SYNAPSE_DIR = "synapse"
 APPSERVICE_DIR = os.path.join(SYNAPSE_DIR, "appservices")
 WEB_DIR = "web"
-BRIDGES_DIR = "bridges"
 # Set when a file that a service reads only at start changed; 80start_services
 # and update-module.d restart the service and remove the flag. A flag stays
 # across a failed task, so the next run still restarts the service.
@@ -55,15 +53,16 @@ PORT_NAMES = [
     "element",
     "cinny",
     "ketesa",
-    "whatsapp",
-    "signal",
-    "telegram",
-    # Ports of bridges removed in 0.3.0 stay reserved (or were reused for
-    # new bridges): the positions of the services after them must not change
-    "steam",
-    "heisenbridge",
+    # Bridges were part of the module before 0.3.0; they are modules of
+    # their own now. Their ports stay reserved: the positions of the
+    # services after them must not change.
+    "reserved_whatsapp",
+    "reserved_signal",
+    "reserved_telegram",
+    "reserved_meta",
+    "reserved_gmessages",
     "reserved_slack",
-    "discord",
+    "reserved_discord",
     "reserved_bluesky",
     "reserved_twitter",
     "reserved_linkedin",
@@ -86,43 +85,17 @@ UDP_RELAY_FIRST = 2
 LIVEKIT_PATH = "/livekit/sfu"
 LK_JWT_PATH = "/livekit/jwt"
 
-# mautrix bridges. "legacy" bridges still use the configuration layout of
-# mautrix-go before bridgev2 (database below appservice, double puppeting
-# and encryption below bridge).
-BRIDGES = {
-    "whatsapp": {"name": "WhatsApp", "image": "dock.mau.dev/mautrix/whatsapp:v0.2609.0"},
-    "signal": {"name": "Signal", "image": "dock.mau.dev/mautrix/signal:v0.2609.0"},
-    "telegram": {"name": "Telegram", "image": "dock.mau.dev/mautrix/telegram:v0.2609.0"},
-    "discord": {"name": "Discord", "image": "dock.mau.dev/mautrix/discord:v0.7.7", "legacy": True},
-    # mautrix-go bridgev2 based. Its SteamKit helper always listens on
-    # 0.0.0.0:50051 without authentication, so the bridge runs in its own
-    # network namespace ("isolated"), see bridge_unit_env().
-    "steam": {
-        "name": "Steam",
-        "image": "ghcr.io/jasonlaguidice/matrix-steam-bridge:1.3.1",
-        "binary": "/app/steam",
-        "isolated": True,
-    },
-    # Bouncer-style IRC bridge: every user connects to the IRC networks of
-    # their choice through the bot. It keeps its state in Matrix account
-    # data; the module writes its registration.
-    "heisenbridge": {
-        "name": "IRC (Heisenbridge)",
-        "image": "docker.io/hif1/heisenbridge:1.15.4",
-        "kind": "heisenbridge",
-    },
-}
-
-# Address of the host's loopback inside the network namespace of an
-# isolated bridge (pasta --map-host-loopback)
-HOST_LOOPBACK = "169.254.1.3"
 DRAUPNIR_LOCALPART = "draupnir"
-HEISENBRIDGE_LOCALPART = "heisenbridge"
 SHARED_SECRET_MODULES = "/modules"
 
-# Bridges of earlier releases. Stored settings that still list them (also
-# from a backup) drop them silently; their configuration and database stay.
-REMOVED_BRIDGES = ("meta", "gmessages", "slack", "bluesky", "twitter", "linkedin")
+# Settings of releases before 0.3.0, when the bridges were part of the
+# module; ensure_settings() removes them from stored settings and backups.
+LEGACY_SETTINGS = ("bridges", "telegram_api_id", "telegram_api_hash", "heisenbridge_owner")
+LEGACY_SECRETS = ("heisenbridge_as_token", "heisenbridge_hs_token")
+
+# Appservices that bridge modules register (add-appservice action)
+APPSERVICES = "appservices.json"
+APPSERVICE_API_VERSION = 1
 
 WEB_APPS = ("element", "cinny", "ketesa")
 
@@ -213,13 +186,9 @@ DEFAULTS = {
     "ketesa_host": "",
     "mail_from": "",
     "max_upload_mb": 100,
-    "bridges": [],
-    "telegram_api_id": "",
-    "telegram_api_hash": "",
     "turn": False,
     "element_call": False,
     "calls_public_ip": "",
-    "heisenbridge_owner": "",
     "draupnir": False,
     "state_compressor": True,
     "shared_secret_auth": False,
@@ -236,8 +205,6 @@ SECRET_KEYS = (
     "turn_shared_secret",
     "livekit_key",
     "livekit_secret",
-    "heisenbridge_as_token",
-    "heisenbridge_hs_token",
     "draupnir_password",
     "shared_secret_auth_secret",
 )
@@ -254,11 +221,15 @@ def ensure_settings(state_dir="."):
         if key not in settings:
             settings[key] = copy.deepcopy(value)
             changed = True
-    kept = [key for key in settings["bridges"] if key not in REMOVED_BRIDGES]
-    if kept != settings["bridges"]:
-        settings["bridges"] = kept
-        changed = True
+    for key in LEGACY_SETTINGS:
+        if key in settings:
+            del settings[key]
+            changed = True
     stored = settings.setdefault("secrets", {})
+    for key in LEGACY_SECRETS:
+        if key in stored:
+            del stored[key]
+            changed = True
     for key in SECRET_KEYS:
         if not stored.get(key):
             if key == "admin_password":
@@ -302,10 +273,8 @@ def apply_request(data, state_dir=".", write=True):
     settings = ensure_settings(state_dir)
     new = copy.deepcopy(settings)
     for key in DEFAULTS:
-        if key in data and key != "telegram_api_hash":
+        if key in data:
             new[key] = data[key]
-    if data.get("telegram_api_hash"):
-        new["telegram_api_hash"] = data["telegram_api_hash"]
 
     new["host"] = check_host("host", (new["host"] or "").strip().lower(), required=True)
     server_name = (new["server_name"] or "").strip().lower() or new["host"]
@@ -336,26 +305,6 @@ def apply_request(data, state_dir=".", write=True):
     if not 1 <= new["max_upload_mb"] <= 10240:
         raise SettingsError("max_upload_mb", new["max_upload_mb"], "invalid_number")
 
-    bridges = []
-    for key in new["bridges"] or []:
-        if key in REMOVED_BRIDGES:
-            continue
-        if key not in BRIDGES:
-            raise SettingsError("bridges", key, "unknown_bridge")
-        if key not in bridges:
-            bridges.append(key)
-    # Keep the order of BRIDGES, so equal selections give equal files
-    new["bridges"] = [key for key in BRIDGES if key in bridges]
-
-    new["telegram_api_id"] = str(new["telegram_api_id"] or "").strip()
-    if new["telegram_api_id"] and not new["telegram_api_id"].isdigit():
-        raise SettingsError("telegram_api_id", new["telegram_api_id"], "invalid_number")
-    if "telegram" in new["bridges"]:
-        if not new["telegram_api_id"]:
-            raise SettingsError("telegram_api_id", "", "telegram_credentials_required")
-        if not new["telegram_api_hash"]:
-            raise SettingsError("telegram_api_hash", "", "telegram_credentials_required")
-
     new["calls_public_ip"] = str(new["calls_public_ip"] or "").strip()
     if new["calls_public_ip"]:
         try:
@@ -365,10 +314,6 @@ def apply_request(data, state_dir=".", write=True):
         if address.is_private or address.is_loopback or address.is_unspecified or address.is_multicast:
             raise SettingsError("calls_public_ip", new["calls_public_ip"], "invalid_ip_address")
         new["calls_public_ip"] = str(address)
-
-    new["heisenbridge_owner"] = str(new["heisenbridge_owner"] or "").strip()
-    if new["heisenbridge_owner"] and not MXID_PATTERN.fullmatch(new["heisenbridge_owner"]):
-        raise SettingsError("heisenbridge_owner", new["heisenbridge_owner"], "invalid_user_id")
 
     for key in ("lets_encrypt", "http2https", "federation", "wellknown_on_server_name", "turn", "element_call",
                 "draupnir", "state_compressor", "shared_secret_auth"):
@@ -423,15 +368,6 @@ def user_id(localpart, server_name):
 
 def regex_quote(text):
     return re.escape(text)
-
-
-def database_uri(settings, port_map, database, host="127.0.0.1"):
-    password = settings["secrets"]["postgres_password"]
-    return f"postgres://postgres:{password}@{host}:{port_map['postgres']}/{database}?sslmode=disable"
-
-
-def bridge_database(key):
-    return f"mautrix_{key}"
 
 
 # --- Synapse -----------------------------------------------------------------
@@ -528,9 +464,9 @@ def wellknown_documents(settings):
     }
 
 
-def appservice_files(settings):
+def appservice_files(appservice_ids=()):
     files = [f"{SYNAPSE_CONFIG}/appservices/{DOUBLE_PUPPET_ID}.yaml"]
-    files += [f"{SYNAPSE_CONFIG}/appservices/{key}.yaml" for key in settings["bridges"]]
+    files += [f"{SYNAPSE_CONFIG}/appservices/{key}.yaml" for key in sorted(appservice_ids)]
     return files
 
 
@@ -581,7 +517,7 @@ def calls_config(settings, udp_map):
     return config
 
 
-def homeserver_config(settings, port_map, ldap=None, smarthost=None, udp_map=None):
+def homeserver_config(settings, port_map, ldap=None, smarthost=None, udp_map=None, appservice_ids=()):
     stored = settings["secrets"]
     if settings["federation"]:
         resources = ["client", "federation"]
@@ -629,7 +565,7 @@ def homeserver_config(settings, port_map, ldap=None, smarthost=None, udp_map=Non
         "url_preview_enabled": False,
         "presence": {"enabled": True},
         "password_config": {"enabled": True, "localdb_enabled": True},
-        "app_service_config_files": appservice_files(settings),
+        "app_service_config_files": appservice_files(appservice_ids),
         "suppress_key_server_warning": True,
     }
     if not delegated(settings) and (settings["federation"] or settings.get("element_call")):
@@ -874,132 +810,99 @@ def firewall_ports(settings, port_map, udp_map):
 
 # --- Bridges -----------------------------------------------------------------
 
-def set_path(document, path, value):
-    """Set document[a][b]... = value, creating missing mappings."""
-    node = document
-    for key in path[:-1]:
-        if not isinstance(node.get(key), dict):
-            node[key] = {}
-        node = node[key]
-    node[path[-1]] = value
+# --- Appservices of bridge modules -----------------------------------------
+
+APPSERVICE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+LOCALPART_PATTERN = re.compile(r"^[a-z0-9._=/+-]{1,255}$")
+TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._~+/=-]{16,512}$")
+LOOPBACK_URL_PATTERN = re.compile(r"^http://127\.0\.0\.1:[0-9]{1,5}(/[^\s]*)?$")
+# Registration keys passed on to Synapse; anything else is dropped
+REGISTRATION_KEYS = (
+    "id", "url", "as_token", "hs_token", "sender_localpart", "rate_limited", "namespaces", "protocols",
+    "receive_ephemeral", "push_ephemeral", "de.sorunome.msc2409.push_ephemeral",
+    "org.matrix.msc3202", "io.element.msc4190",
+)
+NAMESPACE_KINDS = ("users", "aliases", "rooms")
 
 
-def bridge_settings(key, settings, port_map):
-    """The (path, value) pairs of a bridge configuration owned by the module."""
+def validate_registration(registration, settings, owner, existing):
+    """Check an appservice registration of a bridge module; return the
+    cleaned registration or raise SettingsError.
+
+    The registration lets its holder act as every user of its exclusive
+    namespace, so it must stay on this node (loopback URL), must not reuse
+    tokens or IDs of other appservices and must not claim the users of this
+    server."""
+    if not isinstance(registration, dict):
+        raise SettingsError("registration", "", "invalid_registration")
+    reg = {key: registration[key] for key in REGISTRATION_KEYS if key in registration}
+    appservice_id = str(reg.get("id", ""))
+    if not APPSERVICE_ID_PATTERN.fullmatch(appservice_id) or appservice_id == DOUBLE_PUPPET_ID:
+        raise SettingsError("registration.id", appservice_id, "invalid_appservice_id")
+    if appservice_id in existing and existing[appservice_id]["module"] != owner:
+        raise SettingsError("registration.id", appservice_id, "appservice_id_in_use")
+    url = reg.get("url")
+    if url is not None and not LOOPBACK_URL_PATTERN.fullmatch(str(url)):
+        raise SettingsError("registration.url", url, "url_not_on_this_node")
+    for key in ("as_token", "hs_token"):
+        if not TOKEN_PATTERN.fullmatch(str(reg.get(key, ""))):
+            raise SettingsError(f"registration.{key}", "", "invalid_token")
+    if reg["as_token"] == reg["hs_token"]:
+        raise SettingsError("registration.hs_token", "", "invalid_token")
+    used = {settings["secrets"]["doublepuppet_as_token"], settings["secrets"]["doublepuppet_hs_token"]}
+    for other_id, other in existing.items():
+        if other_id != appservice_id:
+            used |= {other["registration"]["as_token"], other["registration"]["hs_token"]}
+    if reg["as_token"] in used or reg["hs_token"] in used:
+        raise SettingsError("registration.as_token", "", "token_in_use")
+    if not LOCALPART_PATTERN.fullmatch(str(reg.get("sender_localpart", ""))):
+        raise SettingsError("registration.sender_localpart", reg.get("sender_localpart", ""), "invalid_localpart")
+    namespaces = reg.get("namespaces") or {}
+    if not isinstance(namespaces, dict):
+        raise SettingsError("registration.namespaces", "", "invalid_namespaces")
     server_name = settings["server_name"]
-    legacy = BRIDGES[key].get("legacy", False)
-    isolated = BRIDGES[key].get("isolated", False)
-    # An isolated bridge reaches Synapse and PostgreSQL through the mapped
-    # host loopback and listens on all addresses of its own namespace
-    local = HOST_LOOPBACK if isolated else "127.0.0.1"
-    database = {"type": "postgres", "uri": database_uri(settings, port_map, bridge_database(key), local)}
-    permissions = {
-        server_name: "user",
-        user_id(ADMIN_LOCALPART, server_name): "admin",
-    }
-    double_puppet = {server_name: "as_token:" + settings["secrets"]["doublepuppet_as_token"]}
-    values = [
-        (("homeserver", "address"), f"http://{local}:{port_map['synapse']}"),
-        (("homeserver", "domain"), server_name),
-        (("appservice", "address"), f"http://127.0.0.1:{port_map[key]}"),
-        (("appservice", "hostname"), "0.0.0.0" if isolated else "127.0.0.1"),
-        (("appservice", "port"), port_map[key]),
-        (("bridge", "permissions"), permissions),
-        # The journal adds time stamps; no log files in the volume
-        (("logging",), {"min_level": "info", "writers": [{"type": "stdout", "format": "pretty"}]}),
+    protected = [
+        user_id(ADMIN_LOCALPART, server_name),
+        user_id(DRAUPNIR_LOCALPART, server_name),
+        # Stands for any ordinary user of this server
+        user_id("ns8-namespace-probe-7f3a", server_name),
     ]
-    if legacy:
-        values += [
-            (("appservice", "database", "type"), database["type"]),
-            (("appservice", "database", "uri"), database["uri"]),
-            (("bridge", "login_shared_secret_map"), double_puppet),
-            (("bridge", "double_puppet_server_map"), {}),
-            # Element creates encrypted direct chats; the bot must read them
-            (("bridge", "encryption", "allow"), True),
-            (("bridge", "federate_rooms"), settings["federation"]),
-        ]
-    else:
-        values += [
-            (("database", "type"), database["type"]),
-            (("database", "uri"), database["uri"]),
-            (("double_puppet", "secrets"), double_puppet),
-            (("double_puppet", "servers"), {}),
-            (("encryption", "allow"), True),
-            (("matrix", "federate_rooms"), settings["federation"]),
-        ]
-    if key == "steam":
-        values += [
-            # The image keeps the SteamKit helper next to the bridge
-            (("network", "steam_bridge_path"), "/app"),
-            (("network", "steam_bridge_address"), "localhost:50051"),
-            (("network", "steam_bridge_auto_start"), True),
-        ]
-    if key == "telegram":
-        values += [
-            (("network", "api_id"), int(settings["telegram_api_id"])),
-            (("network", "api_hash"), settings["telegram_api_hash"]),
-        ]
-    return values
+    clean = {}
+    for kind in NAMESPACE_KINDS:
+        entries = namespaces.get(kind) or []
+        if not isinstance(entries, list):
+            raise SettingsError(f"registration.namespaces.{kind}", "", "invalid_namespaces")
+        clean[kind] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("regex"), str):
+                raise SettingsError(f"registration.namespaces.{kind}", "", "invalid_namespaces")
+            try:
+                pattern = re.compile(entry["regex"])
+            except re.error:
+                raise SettingsError(f"registration.namespaces.{kind}", entry["regex"], "invalid_regex") from None
+            exclusive = bool(entry.get("exclusive", False))
+            if kind == "users" and exclusive and any(pattern.match(mxid) for mxid in protected):
+                raise SettingsError("registration.namespaces.users", entry["regex"], "namespace_too_wide")
+            clean[kind].append({"regex": entry["regex"], "exclusive": exclusive})
+    reg["namespaces"] = clean
+    reg["rate_limited"] = bool(reg.get("rate_limited", False))
+    return reg
 
 
-def patch_bridge_config(document, key, settings, port_map):
-    """Apply the module-owned settings to a bridge configuration."""
-    document = copy.deepcopy(document) if document else {}
-    for path, value in bridge_settings(key, settings, port_map):
-        set_path(document, path, value)
-    return document
-
-
-def patch_registration(document, key, port_map):
-    """Ports can change (restore, clone): keep the push URL current."""
-    document = copy.deepcopy(document)
-    document["url"] = f"http://127.0.0.1:{port_map[key]}"
-    return document
-
-
-def heisenbridge_registration(settings, port_map):
-    stored = settings["secrets"]
+def matrix_info(settings, port_map):
+    """What a bridge module needs to connect to this homeserver (output of
+    add-appservice and get-matrix-info)."""
     return {
-        "id": "heisenbridge",
-        "url": f"http://127.0.0.1:{port_map['heisenbridge']}",
-        "as_token": stored["heisenbridge_as_token"],
-        "hs_token": stored["heisenbridge_hs_token"],
-        "rate_limited": False,
-        "sender_localpart": HEISENBRIDGE_LOCALPART,
-        # Heisenbridge derives the puppet prefix from this exact form
-        "namespaces": {"users": [{"regex": "@hbirc_.*", "exclusive": True}], "aliases": [], "rooms": []},
+        "api_version": APPSERVICE_API_VERSION,
+        "server_name": settings["server_name"],
+        # Bridge modules run on this node and reach Synapse directly
+        "homeserver_url": f"http://127.0.0.1:{port_map['synapse']}",
+        "public_url": f"https://{settings['host']}",
+        "federation": settings["federation"],
+        "admin_user": user_id(ADMIN_LOCALPART, settings["server_name"]),
+        # For double puppeting (mautrix: double_puppet.secrets)
+        "double_puppet_secret": "as_token:" + settings["secrets"]["doublepuppet_as_token"],
     }
-
-
-def bridge_unit_env(key, settings=None, port_map=None):
-    """Variables of bridge@<key>.service. $BRIDGE_NET and $BRIDGE_ARGS are
-    split into words by systemd."""
-    info = BRIDGES[key]
-    env = {"BRIDGE_IMAGE": info["image"]}
-    if info.get("kind") == "heisenbridge":
-        owner = (settings or {}).get("heisenbridge_owner")
-        args = ["-c", "/data/registration.yaml", "-l", "127.0.0.1", "-p", str(port_map["heisenbridge"])]
-        if owner:
-            args += ["-o", owner]
-        args.append(f"http://127.0.0.1:{port_map['synapse']}")
-        env.update({
-            "BRIDGE_BINARY": "heisenbridge",
-            "BRIDGE_ARGS": " ".join(args),
-            "BRIDGE_NET": "--network=host",
-            "BRIDGE_DATABASE": "none",
-        })
-        return env
-    env.update({
-        "BRIDGE_BINARY": info.get("binary", f"/usr/bin/mautrix-{key}"),
-        "BRIDGE_ARGS": "-c /data/config.yaml -r /data/registration.yaml",
-        "BRIDGE_DATABASE": bridge_database(key),
-    })
-    if info.get("isolated"):
-        port = port_map[key]
-        env["BRIDGE_NET"] = f"--network=pasta:--map-host-loopback,{HOST_LOOPBACK} --publish=127.0.0.1:{port}:{port}"
-    else:
-        env["BRIDGE_NET"] = "--network=host"
-    return env
 
 
 # --- Draupnir and maintenance ------------------------------------------------
@@ -1050,18 +953,17 @@ def urls(settings):
     }
 
 
-def configuration(settings, domains, admin_ready, port_map=None, udp_map=None, draupnir_room=""):
+def configuration(settings, domains, admin_ready, port_map=None, udp_map=None, draupnir_room="", appservices=None):
     """Output of get-configuration."""
-    result = {key: settings.get(key, value) for key, value in DEFAULTS.items() if key != "telegram_api_hash"}
-    result["telegram_api_hash_set"] = bool(settings.get("telegram_api_hash"))
+    result = {key: settings.get(key, value) for key, value in DEFAULTS.items()}
     result["configured"] = bool(settings.get("host"))
     result["user_domains"] = domains
-    result["available_bridges"] = [
-        {"id": key, "name": info["name"], "image": info["image"]} for key, info in BRIDGES.items()
-    ]
     documents = wellknown_documents(settings) if settings.get("host") and delegated(settings) else {}
     result["wellknown_server"] = json.dumps(documents["server"]) if documents else ""
     result["wellknown_client"] = json.dumps(documents["client"]) if documents else ""
+    result["appservices"] = [
+        {"id": key, "module": value["module"]} for key, value in sorted((appservices or {}).items())
+    ]
     result["draupnir_management_room"] = draupnir_room if settings.get("draupnir") else ""
     result["shared_secret_auth_secret"] = (
         settings.get("secrets", {}).get("shared_secret_auth_secret", "") if settings.get("shared_secret_auth") else ""
