@@ -152,7 +152,12 @@ Add module for ${SCENARIO} scenario
     Set Suite Variable    ${module_id}    ${output.module_id}
 
 Configure initial module
-    Configure current module
+    IF    r'${SCENARIO}' == 'update'
+        # The previous release may not know the newer bridges yet
+        Configure current module    bridges=${{["whatsapp", "discord"]}}
+    ELSE
+        Configure current module
+    END
     Read admin credentials
     IF    r'${SCENARIO}' == 'update'
         # Data written before the update must survive it
