@@ -106,13 +106,7 @@
                     "whatsapp",
                     "signal",
                     "telegram",
-                    "meta",
-                    "gmessages",
-                    "slack",
-                    "discord",
-                    "bluesky",
-                    "twitter",
-                    "linkedin"
+                    "discord"
                 ]
             },
             "uniqueItems": true

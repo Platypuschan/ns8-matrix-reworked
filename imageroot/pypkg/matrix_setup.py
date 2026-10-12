@@ -58,13 +58,15 @@ PORT_NAMES = [
     "whatsapp",
     "signal",
     "telegram",
-    "meta",
-    "gmessages",
-    "slack",
+    # Ports of bridges removed in 0.3.0 stay reserved: the positions of the
+    # services after them must not change
+    "reserved_meta",
+    "reserved_gmessages",
+    "reserved_slack",
     "discord",
-    "bluesky",
-    "twitter",
-    "linkedin",
+    "reserved_bluesky",
+    "reserved_twitter",
+    "reserved_linkedin",
     "wellknown",
     # Element Call: LiveKit signalling (through Traefik), LiveKit ICE/TCP
     # (public) and the LiveKit JWT service (through Traefik)
@@ -91,14 +93,12 @@ BRIDGES = {
     "whatsapp": {"name": "WhatsApp", "image": "dock.mau.dev/mautrix/whatsapp:v0.2609.0"},
     "signal": {"name": "Signal", "image": "dock.mau.dev/mautrix/signal:v0.2609.0"},
     "telegram": {"name": "Telegram", "image": "dock.mau.dev/mautrix/telegram:v0.2609.0"},
-    "meta": {"name": "Messenger / Instagram", "image": "dock.mau.dev/mautrix/meta:v0.2609.0"},
-    "gmessages": {"name": "Google Messages", "image": "dock.mau.dev/mautrix/gmessages:v0.2609.0"},
-    "slack": {"name": "Slack", "image": "dock.mau.dev/mautrix/slack:v0.2609.1"},
     "discord": {"name": "Discord", "image": "dock.mau.dev/mautrix/discord:v0.7.7", "legacy": True},
-    "bluesky": {"name": "Bluesky", "image": "dock.mau.dev/mautrix/bluesky:v0.2510.0"},
-    "twitter": {"name": "X (Twitter)", "image": "dock.mau.dev/mautrix/twitter:v0.2609.0"},
-    "linkedin": {"name": "LinkedIn", "image": "dock.mau.dev/mautrix/linkedin:v0.2609.0"},
 }
+
+# Bridges of earlier releases. Stored settings that still list them (also
+# from a backup) drop them silently; their configuration and database stay.
+REMOVED_BRIDGES = ("meta", "gmessages", "slack", "bluesky", "twitter", "linkedin")
 
 WEB_APPS = ("element", "cinny", "ketesa")
 
@@ -220,6 +220,10 @@ def ensure_settings(state_dir="."):
         if key not in settings:
             settings[key] = copy.deepcopy(value)
             changed = True
+    kept = [key for key in settings["bridges"] if key not in REMOVED_BRIDGES]
+    if kept != settings["bridges"]:
+        settings["bridges"] = kept
+        changed = True
     stored = settings.setdefault("secrets", {})
     for key in SECRET_KEYS:
         if not stored.get(key):
@@ -300,6 +304,8 @@ def apply_request(data, state_dir=".", write=True):
 
     bridges = []
     for key in new["bridges"] or []:
+        if key in REMOVED_BRIDGES:
+            continue
         if key not in BRIDGES:
             raise SettingsError("bridges", key, "unknown_bridge")
         if key not in bridges:

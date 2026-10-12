@@ -88,8 +88,17 @@ class SettingsTest(StateTest):
         self.assertEqual(matrix_setup.read_settings(self.state)["element_host"], "")
 
     def test_bridges_are_ordered_and_unique(self):
-        settings = self.apply(bridges=["slack", "whatsapp", "slack"])
-        self.assertEqual(settings["bridges"], ["whatsapp", "slack"])
+        settings = self.apply(bridges=["discord", "whatsapp", "discord"])
+        self.assertEqual(settings["bridges"], ["whatsapp", "discord"])
+
+    def test_removed_bridges_are_dropped(self):
+        # A request or a backup from before 0.3.0 may still list them
+        settings = self.apply(bridges=["slack", "whatsapp", "linkedin"])
+        self.assertEqual(settings["bridges"], ["whatsapp"])
+        stored = json.loads(Path(self.state, matrix_setup.SETTINGS).read_text())
+        stored["bridges"] = ["meta", "signal"]
+        Path(self.state, matrix_setup.SETTINGS).write_text(json.dumps(stored))
+        self.assertEqual(matrix_setup.ensure_settings(self.state)["bridges"], ["signal"])
 
     def test_telegram_hash_is_kept_when_empty(self):
         self.apply(bridges=["telegram"], telegram_api_id="123", telegram_api_hash="abc")
@@ -106,18 +115,30 @@ class PortsTest(unittest.TestCase):
         ports = matrix_setup.ports(ENV)
         self.assertEqual(ports["synapse"], 20001)
         self.assertEqual(ports["postgres"], 20002)
-        self.assertEqual(ports["linkedin"], 20015)
+        self.assertEqual(ports["discord"], 20012)
+        self.assertEqual(ports["reserved_linkedin"], 20015)
         self.assertEqual(ports["wellknown"], 20016)
 
     def test_positions_never_change(self):
         # Ports of existing installations depend on these positions
         self.assertEqual(matrix_setup.PORT_NAMES[:5], ["synapse", "postgres", "element", "cinny", "ketesa"])
-        self.assertEqual(matrix_setup.PORT_NAMES[5:15], list(matrix_setup.BRIDGES))
+        self.assertEqual(matrix_setup.PORT_NAMES[5:15], [
+            "whatsapp", "signal", "telegram", "reserved_meta", "reserved_gmessages",
+            "reserved_slack", "discord", "reserved_bluesky", "reserved_twitter", "reserved_linkedin",
+        ])
+        self.assertTrue(set(matrix_setup.BRIDGES) <= set(matrix_setup.PORT_NAMES))
 
     def test_build_demands_enough_ports(self):
         build = (Path(__file__).resolve().parents[1] / "build-images.sh").read_text()
         demand = int(build.split("org.nethserver.tcp-ports-demand=")[1].split('"')[0])
         self.assertGreaterEqual(demand, len(matrix_setup.PORT_NAMES))
+
+    def test_ports_env_is_valid_shell(self):
+        # 80start_services sources it and systemd reads it as EnvironmentFile
+        with tempfile.TemporaryDirectory() as state:
+            matrix_runtime.write_ports(matrix_setup.ports(ENV), state)
+            for line in Path(state, "ports.env").read_text().splitlines():
+                self.assertRegex(line, r"^[A-Z][A-Z0-9_]*=[0-9]+$")
 
     def test_too_few_ports(self):
         with self.assertRaises(RuntimeError):

@@ -16,6 +16,10 @@ import matrix_runtime
 import matrix_setup
 
 subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+# Bridges removed from the module (their state stays in bridges/<key>)
+for key in matrix_setup.REMOVED_BRIDGES:
+    subprocess.run(["systemctl", "--user", "disable", "--now", f"bridge@{key}.service"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 settings = matrix_setup.read_settings()
 if not settings.get("host"):
     sys.exit(0)
