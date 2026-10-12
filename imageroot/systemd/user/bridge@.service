@@ -43,6 +43,8 @@ ExecStart=/usr/bin/podman run --conmon-pidfile %t/bridge-%i.pid \
     ${BRIDGE_IMAGE} \
     $BRIDGE_ARGS
 ExecStop=/usr/bin/podman stop --ignore --cidfile %t/bridge-%i.ctr-id -t 30
+# Bridges that run as PID 1 and ignore SIGTERM (Heisenbridge) are killed
+SuccessExitStatus=137 143
 ExecStopPost=/usr/bin/podman rm --ignore -f --cidfile %t/bridge-%i.ctr-id
 SyslogIdentifier=%u
 PIDFile=%t/bridge-%i.pid

@@ -30,16 +30,23 @@ CONTEXT.verify_mode = ssl.CERT_NONE
 
 
 class Client:
-    def __init__(self, host, token=None):
+    def __init__(self, host, token=None, direct_port=None, forwarded_for=None):
         self.host = host
         self.token = token
+        # Talk to Synapse directly (not through Traefik); with a forwarded
+        # address the request counts against that address' rate limits
+        self.direct_port = direct_port
+        self.forwarded_for = forwarded_for
 
     def request(self, method, path, body=None, expect=(200,)):
         headers = {"Host": self.host, "Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
+        if self.forwarded_for:
+            headers["X-Forwarded-For"] = self.forwarded_for
         data = None if body is None else json.dumps(body).encode()
-        request = urllib.request.Request("https://127.0.0.1" + path, data=data, method=method, headers=headers)
+        base = f"http://127.0.0.1:{self.direct_port}" if self.direct_port else "https://127.0.0.1"
+        request = urllib.request.Request(base + path, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(request, context=CONTEXT, timeout=30) as response:
                 status, raw, ctype = response.status, response.read(), response.headers.get("Content-Type", "")
@@ -87,6 +94,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", required=True)
     parser.add_argument("--token")
+    parser.add_argument("--direct-port", type=int)
+    parser.add_argument("--forwarded-for")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("versions")
     get = sub.add_parser("get")
@@ -119,7 +128,7 @@ def main():
     p = sub.add_parser("server-admin")
     p.add_argument("user_id")
     args = parser.parse_args()
-    client = Client(args.host, args.token)
+    client = Client(args.host, args.token, args.direct_port, args.forwarded_for)
 
     if args.command == "versions":
         result = client.request("GET", "/_matrix/client/versions")[0]
