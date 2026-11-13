@@ -1,0 +1,128 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "automerge": false,
+  "dependencyDashboard": true,
+  "rebaseWhen": "behind-base-branch",
+  "prConcurrentLimit": 2,
+  "prHourlyLimit": 2,
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build-images\\.sh$/"
+      ],
+      "matchStrings": [
+        "NODE_IMAGE=\"(?<depName>docker\\.io/library/node):(?<currentValue>[-0-9A-Za-z_.]+)(?:@(?<currentDigest>sha256:[a-fA-F0-9]{64}))?\""
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build-images\\.sh$/"
+      ],
+      "matchStrings": [
+        "[ \\t]+(?<depName>(?:docker\\.io|ghcr\\.io)/[-a-zA-Z0-9_./]+):(?<currentValue>[-0-9A-Za-z_.]+)(?:@(?<currentDigest>sha256:[a-fA-F0-9]{64}))?[ \\t]*(?:\\r?\\n|$)"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^imageroot/pypkg/matrix_setup\\.py$/"
+      ],
+      "matchStrings": [
+        "\"image\": \"(?<depName>dock\\.mau\\.dev/mautrix/[-a-z0-9]+):(?<currentValue>[-0-9A-Za-z_.]+)(?:@(?<currentDigest>sha256:[a-fA-F0-9]{64}))?\""
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "CI actions are separate from setup-node version inputs",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepTypes": [
+        "action",
+        "workflow",
+        "github-runner"
+      ],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Group Docker short/full names and setup-node; Node 25+ needs a separate Corepack migration",
+      "matchPackageNames": [
+        "node",
+        "docker.io/library/node",
+        "actions/node-versions"
+      ],
+      "groupName": "Node.js toolchain",
+      "allowedVersions": "<25"
+    },
+    {
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "ui/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "UI dependencies (non-major)",
+      "groupSlug": "ui-dependencies-non-major"
+    },
+    {
+      "description": "All RELEASE_PATHS from check-catalog-version, including lockfile-only updates",
+      "matchFileNames": [
+        "imageroot/**",
+        "ui/**",
+        "build-images.sh"
+      ],
+      "bumpVersions": [
+        {
+          "name": "Module release version",
+          "filePatterns": [
+            "CATALOG_VERSION"
+          ],
+          "matchStrings": [
+            "^(?<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\\s*$"
+          ],
+          "bumpType": "patch"
+        }
+      ]
+    },
+    {
+      "description": "Runtime and bridge updates need migration/compatibility review, including patches and digests",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchFileNames": [
+        "build-images.sh",
+        "imageroot/**"
+      ],
+      "matchPackageNames": [
+        "!node",
+        "!docker.io/library/node"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true,
+      "automerge": false
+    }
+  ]
+}

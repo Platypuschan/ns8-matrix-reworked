@@ -1,0 +1,32 @@
+name: Renovate policy
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Renovate config and release policy
+    runs-on: ubuntu-26.04
+    container:
+      image: ghcr.io/renovatebot/renovate:44.228.0
+      # GitHub runner file-command/workspace mounts are not writable by image UID 12021.
+      options: --user=0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Strict config validation
+        run: renovate-config-validator --strict renovate.json
+      - name: Native extraction, package rules and release regression tests
+        run: node tests/renovate-policy.mjs
+      - name: Repository extraction (no credentials or writes)
+        run: renovate --platform=local --dry-run=extract --require-config=required --onboarding=false
