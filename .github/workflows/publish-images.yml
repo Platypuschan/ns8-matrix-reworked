@@ -14,7 +14,13 @@ concurrency:
   group: publish-suite-${{ github.ref }}
   cancel-in-progress: true
 
+# Shared contract: see .github/CI-RELEASE-CONTRACT.md.
+# Module-only prerequisites are deliberately bounded below, not mixed into
+# digest resolution, QEMU, scanners or tested-image attestation.
 jobs:
+  # BEGIN MODULE PREREQUISITES
+  # END MODULE PREREQUISITES
+
   # A pushed tag whose image already exists, such as the release tag that
   # publish-catalog-version creates, must not rebuild and replace the tested
   # image under that tag. New tags (testing builds) still build.
@@ -51,9 +57,12 @@ jobs:
             exit 1
           fi
 
+  # BEGIN MODULE CONFIG
+  # Wire the module prerequisites above; retain any first-run guard.
   publish-images:
     needs: existing-tag
     if: ${{ needs.existing-tag.outputs.build == 'true' }}
+  # END MODULE CONFIG
     uses: NethServer/ns8-github-actions/.github/workflows/publish-branch.yml@e35baed847065163e5fcb2fe396c968aa413827b # v1
 
   module:
@@ -77,6 +86,7 @@ jobs:
     uses: NethServer/ns8-github-actions/.github/workflows/test-on-qemu.yml@e35baed847065163e5fcb2fe396c968aa413827b # v1
     with:
       distro: ${{ matrix.distro }}
+      # The pinned template passes image_url unchanged to test-module-*.sh.
       image_url: ${{ needs.published-digest.outputs.reference }}
       repo_ref: ${{ needs.module.outputs.sha }}
       version_tag: ${{ needs.module.outputs.tag }}
