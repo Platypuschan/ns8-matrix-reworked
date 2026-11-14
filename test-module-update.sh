@@ -9,8 +9,9 @@ set -Eeuo pipefail
 
 cd "$(dirname "$0")"
 IMAGE_URL="${2:?missing module image URL}"
+IMAGE_REPOSITORY="${IMAGE_URL%%@*}"
 status=0
-PREVIOUS_IMAGE_URL="$(python3 .github/scripts/previous-release "${IMAGE_URL%:*}")" || status=$?
+PREVIOUS_IMAGE_URL="$(python3 .github/scripts/previous-release "${IMAGE_REPOSITORY%:*}")" || status=$?
 if [[ "${status}" -eq 3 ]]; then
     # Before the first release there is nothing to update from. Any other
     # lookup failure (registry, network) still fails the scenario.
