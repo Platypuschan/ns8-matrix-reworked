@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+# Copyright (C) 2026 Nethesis S.r.l.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Require a CATALOG_VERSION bump for every change that alters the module image.
@@ -15,8 +16,10 @@ import subprocess
 import sys
 
 VERSION_FILE = "CATALOG_VERSION"
-# Paths that end up in the published module image.
+# BEGIN MODULE CONFIG
+# Paths packaged in, or referenced by, this module; promotion imports this list.
 RELEASE_PATHS = ("imageroot", "ui", "build-images.sh")
+# END MODULE CONFIG
 SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"

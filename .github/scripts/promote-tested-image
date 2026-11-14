@@ -9,8 +9,12 @@ from pathlib import Path
 import re
 import subprocess
 
+# BEGIN MODULE CONFIG
+# Identity and independent same-commit push gates; never weaken required gates.
 IMAGE = 'ghcr.io/platypuschan/matrix-reworked'
 REPOSITORY = 'Platypuschan/ns8-matrix-reworked'
+REQUIRED_WORKFLOWS = ('.github/workflows/validate.yml',)
+# END MODULE CONFIG
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 SHA = re.compile(r'[0-9a-f]{40}')
 VERSION = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?')
@@ -181,9 +185,9 @@ class Services:
         return self.git('ls-remote', '--exit-code', 'origin', 'refs/heads/main').split()[0] == commit
 
 
-def validated_run(runs, commit):
+def validated_run(runs, commit, workflow=".github/workflows/validate.yml"):
     candidates = [run for run in runs if
-                  run.get('path') == '.github/workflows/validate.yml'
+                  run.get('path') == workflow
                   and run.get('event') == 'push' and run.get('head_sha') == commit
                   and run.get('head_repository', {}).get('full_name') == REPOSITORY]
     if not candidates:
@@ -193,6 +197,10 @@ def validated_run(runs, commit):
         return False
     require(newest.get('conclusion') == 'success', 'same-commit Validate did not succeed')
     return True
+
+
+def validated_workflows(runs, commit):
+    return all(validated_run(runs, commit, workflow) for workflow in REQUIRED_WORKFLOWS)
 
 
 def main():
@@ -208,11 +216,11 @@ def main():
         require(SHA.fullmatch(commit), 'invalid tested SHA')
         for _ in range(80):
             runs = s.api(f'repos/{REPOSITORY}/actions/runs?head_sha={commit}&event=push&per_page=100')
-            if validated_run(runs['workflow_runs'], commit):
-                print('Same-commit Validate (static + UI) succeeded')
+            if validated_workflows(runs['workflow_runs'], commit):
+                print('Same-commit required validation workflows succeeded')
                 return
             time.sleep(15)
-        raise RuntimeError('same-commit Validate did not finish within 20 minutes')
+        raise RuntimeError('same-commit validation workflows did not finish within 20 minutes')
     identity = [os.environ[key] for key in
                 ('TESTED_REPOSITORY', 'TESTED_RUN_ID', 'TESTED_RUN_ATTEMPT', 'TESTED_SHA')]
     version = Path('CATALOG_VERSION').read_text().strip()

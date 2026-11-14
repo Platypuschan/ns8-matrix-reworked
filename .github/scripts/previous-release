@@ -4,10 +4,10 @@
 
 """Print the published release that the update test starts from.
 
-This is the newest stable SemVer tag of IMAGE that is not newer than
-CATALOG_VERSION, i.e. the version a Software Center user runs before updating
-to the image under test. If CATALOG_VERSION itself is already published (a
-change outside the module image keeps the version), that release is used.
+By default select the newest stable SemVer tag not newer than CATALOG_VERSION.
+--strict-older requires a real version upgrade rather than a reinstall.
+The module configuration below preserves first-release exit status and any
+explicit prerelease fallback; registry/authentication errors remain fatal.
 """
 
 import argparse
@@ -19,9 +19,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-# Exit status when the registry has no stable release yet (first release).
+# BEGIN MODULE CONFIG
+# Keep the update-wrapper exit contract; prerelease baselines are opt-in.
 NO_RELEASE = 3
+FALLBACK_TO_PRERELEASE = False
+# END MODULE CONFIG
+
+HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 
 
@@ -38,8 +42,8 @@ def load_version_module():
 version = load_version_module()
 
 
-def newest_release(tags, current):
-    """Return the newest stable tag that is not newer than current, or None."""
+def newest_release(tags, current, stable_only=True, strict_older=False):
+    """Select a baseline; stable-only and same-version are the safe defaults."""
     limit = version.parse_version(current)
     released = []
     for tag in tags:
@@ -48,7 +52,7 @@ def newest_release(tags, current):
         except version.VersionError:
             continue
         # Stable releases only: those are what the catalog offers by default.
-        if key[3] == 1 and key <= limit:
+        if (key[3] == 1 or not stable_only) and (key < limit if strict_older else key <= limit):
             released.append((key, tag))
     return max(released)[1] if released else None
 
@@ -71,9 +75,14 @@ def registry_tags(image):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", help="image name without tag, e.g. ghcr.io/owner/module")
+    parser.add_argument("--strict-older", action="store_true",
+                        help="require a real upgrade baseline, not a same-version reinstall")
     args = parser.parse_args()
     current = (ROOT / "CATALOG_VERSION").read_text(encoding="utf-8").strip()
-    tag = newest_release(registry_tags(args.image), current)
+    tags = registry_tags(args.image)
+    tag = newest_release(tags, current, strict_older=args.strict_older)
+    if tag is None and FALLBACK_TO_PRERELEASE:
+        tag = newest_release(tags, current, stable_only=False, strict_older=args.strict_older)
     if tag is None:
         print(f"No published release of {args.image} up to {current}", file=sys.stderr)
         return NO_RELEASE
