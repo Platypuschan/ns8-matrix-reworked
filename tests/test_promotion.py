@@ -145,8 +145,12 @@ class PromotionTests(unittest.TestCase):
     def test_every_real_release_path_blocks_reusing_existing_version(self):
         import runpy
         contract = runpy.run_path(str(ROOT / '.github/scripts/check-catalog-version'))
+        baseline = self.sha
         for release_path in contract['RELEASE_PATHS']:
             with self.subTest(release_path=release_path):
+                # Isolate each path: an earlier imageroot change must not mask
+                # an incorrectly accepted runtime/app/build-script change.
+                self.git('reset', '--hard', baseline)
                 self.s.tags[self.m.IMAGE + ':0.1.12'] = self.digest
                 path = self.root / release_path
                 if path.is_dir() or '.' not in path.name:
