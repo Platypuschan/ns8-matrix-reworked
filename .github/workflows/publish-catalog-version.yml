@@ -6,61 +6,54 @@ on:
     types: [completed]
 
 permissions:
+  actions: read
   contents: read
-  packages: write
+
+# Serialize all promotions, including reruns. Never cancel a partial publication.
+concurrency:
+  group: catalog-promotion
+  cancel-in-progress: false
 
 jobs:
   promote:
     if: >-
+      github.repository == 'Platypuschan/ns8-matrix-reworked' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+      packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Check catalog version
-        run: .github/scripts/check-catalog-version
-      - name: Promote the tested image once
+        run: python3 .github/scripts/check-catalog-version
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tested-image-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+          run-id: ${{ github.event.workflow_run.id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: promotion-record
+      - name: Promote the tested digest and reconcile its release
         shell: bash
         env:
+          TESTED_REPOSITORY: ${{ github.repository }}
+          TESTED_RUN_ID: ${{ github.event.workflow_run.id }}
+          TESTED_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
-          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          current_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
-          if [[ "$current_sha" != "$TESTED_SHA" ]]; then
-            echo 'A newer main commit exists; its test run will publish the version.'
-            exit 0
-          fi
-
-          version="$(tr -d '[:space:]' < CATALOG_VERSION)"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid SemVer catalog version: $version" >&2
-            exit 1
-          fi
-
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/matrix-reworked"
-          sudo apt-get update -qq
-          sudo apt-get install -y skopeo
-          if skopeo inspect --raw "docker://$image:$version" >/dev/null 2>&1; then
-            # The version check above passed, so only files outside the image
-            # changed since CATALOG_VERSION was set.
-            echo "::notice::$image:$version already exists; no module image change since that release."
-            exit 0
-          fi
-
-          printf '%s' "$REGISTRY_TOKEN" | skopeo login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
-          # Resolve :latest to an immutable digest and make sure it was built
-          # from the tested commit, so a later push cannot be promoted instead.
-          digest="$(skopeo inspect --format '{{.Digest}}' "docker://$image:latest")"
-          revision="$(skopeo inspect --format '{{index .Labels "org.opencontainers.image.revision"}}' "docker://$image@$digest")"
-          if [[ "$revision" != "$TESTED_SHA" ]]; then
-            echo "$image:latest ($digest) was built from '$revision', not $TESTED_SHA; not promoting." >&2
-            exit 1
-          fi
-          skopeo copy --all "docker://$image@$digest" "docker://$image:$version"
-          skopeo inspect --raw "docker://$image:$version" >/dev/null
-          echo "Published $image:$version ($digest) from tested commit $TESTED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          command -v skopeo >/dev/null || { sudo apt-get update -qq; sudo apt-get install -y skopeo; }
+          trap 'skopeo logout ghcr.io >/dev/null' EXIT
+          printf '%s' "$GH_TOKEN" | skopeo login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          python3 .github/scripts/promote-tested-image promote --record promotion-record/tested-image.json \
+            | tee -a "$GITHUB_STEP_SUMMARY"

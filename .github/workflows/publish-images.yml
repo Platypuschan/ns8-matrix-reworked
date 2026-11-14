@@ -15,18 +15,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A pushed tag whose image already exists, such as the release tag that
+  # publish-catalog-version creates, must not rebuild and replace the tested
+  # image under that tag. New tags (testing builds) still build.
+  existing-tag:
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != push || "$REF_TYPE" != tag ]]; then
+            echo build=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # publish-branch.yml publishes the tag with '/' replaced by '-'.
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/matrix-reworked:${REF_NAME//\//-}"
+          command -v skopeo >/dev/null || { sudo apt-get update -qq; sudo apt-get install -y skopeo; }
+          printf '%s' "$REGISTRY_TOKEN" | skopeo login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          if inspect="$(skopeo inspect --raw "docker://$image" 2>&1)"; then
+            echo "::notice::$image already exists; not rebuilding it for this tag."
+            echo build=false >> "$GITHUB_OUTPUT"
+          elif grep -q 'manifest unknown' <<<"$inspect"; then
+            echo build=true >> "$GITHUB_OUTPUT"
+          else
+            echo "$inspect" >&2
+            exit 1
+          fi
+
   publish-images:
-    uses: NethServer/ns8-github-actions/.github/workflows/publish-branch.yml@v1
+    needs: existing-tag
+    if: ${{ needs.existing-tag.outputs.build == 'true' }}
+    uses: NethServer/ns8-github-actions/.github/workflows/publish-branch.yml@e35baed847065163e5fcb2fe396c968aa413827b # v1
 
   module:
     needs: publish-images
-    uses: NethServer/ns8-github-actions/.github/workflows/module-info.yml@v1
+    uses: NethServer/ns8-github-actions/.github/workflows/module-info.yml@e35baed847065163e5fcb2fe396c968aa413827b # v1
 
   qemu:
     # Static: a skipped job shows its name with the matrix expressions
     # unexpanded. The called job adds "<scenario> <distro>".
     name: NS8
-    needs: module
+    needs: [module, published-digest]
     strategy:
       fail-fast: false
       matrix:
@@ -36,10 +74,10 @@ jobs:
     permissions:
       contents: read
       statuses: write
-    uses: NethServer/ns8-github-actions/.github/workflows/test-on-qemu.yml@v1
+    uses: NethServer/ns8-github-actions/.github/workflows/test-on-qemu.yml@e35baed847065163e5fcb2fe396c968aa413827b # v1
     with:
       distro: ${{ matrix.distro }}
-      image_url: ${{ needs.module.outputs.image }}
+      image_url: ${{ needs.published-digest.outputs.reference }}
       repo_ref: ${{ needs.module.outputs.sha }}
       version_tag: ${{ needs.module.outputs.tag }}
       artifact_suffix: ${{ matrix.scenario }}
@@ -48,8 +86,82 @@ jobs:
       timeout_minutes: 60
 
   trivy:
-    needs: module
+    needs: [module, published-digest]
     if: ${{ needs.module.outputs.release == 'stable' || needs.module.outputs.release == 'latest' || github.event_name == 'workflow_dispatch' }}
-    uses: NethServer/ns8-github-actions/.github/workflows/scan-with-trivy.yml@v1
+    uses: NethServer/ns8-github-actions/.github/workflows/scan-with-trivy.yml@e35baed847065163e5fcb2fe396c968aa413827b # v1
     with:
-      images: ${{ needs.module.outputs.images }}
+      images: ${{ needs.published-digest.outputs.images }}
+
+  published-digest:
+    name: Resolve published image digest
+    needs: module
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+      reference: ${{ steps.digest.outputs.reference }}
+      images: ${{ steps.images.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.module.outputs.sha }}
+          persist-credentials: false
+      - id: digest
+        env:
+          IMAGE: ${{ needs.module.outputs.image }}
+          TESTED_REPOSITORY: ${{ github.repository }}
+          TESTED_RUN_ID: ${{ github.run_id }}
+          TESTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+          TESTED_SHA: ${{ needs.module.outputs.sha }}
+        run: python3 .github/scripts/promote-tested-image capture --image "$IMAGE"
+      - id: images
+        # Scan the immutable module and its declared runtimes, not :latest.
+        env:
+          REFERENCE: ${{ steps.digest.outputs.reference }}
+        run: |
+          set -euo pipefail
+          images="$(skopeo inspect "docker://$REFERENCE" | jq -c --arg image "$REFERENCE" \
+            '[(.Labels["org.nethserver.images"] | split(" ")[] | select(length > 0)), $image]')"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
+  tested-image:
+    name: Record tested image digest
+    needs: [module, published-digest, qemu, trivy]
+    # Trivy is optional on feature branches, mandatory on main/latest.
+    if: >-
+      always() && !cancelled() &&
+      needs.module.result == 'success' &&
+      needs.published-digest.result == 'success' &&
+      needs.qemu.result == 'success' &&
+      (needs.trivy.result == 'success' ||
+       (needs.trivy.result == 'skipped' && github.ref != 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.module.outputs.sha }}
+          persist-credentials: false
+      - name: Require same-commit static and UI validation before attesting
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ needs.module.outputs.sha }}
+        run: python3 .github/scripts/promote-tested-image checks
+      - name: Record the immutable image after all mandatory checks
+        env:
+          IMAGE: ${{ needs.published-digest.outputs.reference }}
+          TESTED_REPOSITORY: ${{ github.repository }}
+          TESTED_RUN_ID: ${{ github.run_id }}
+          TESTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+          TESTED_SHA: ${{ needs.module.outputs.sha }}
+        run: python3 .github/scripts/promote-tested-image capture --image "$IMAGE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tested-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tested-image.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Bind QEMU input to a manifest digest; promote only a same-run tested record."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+IMAGE = 'ghcr.io/platypuschan/matrix-reworked'
+REPOSITORY = 'Platypuschan/ns8-matrix-reworked'
+DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
+SHA = re.compile(r'[0-9a-f]{40}')
+VERSION = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?')
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def manifest_digest(raw):
+    return 'sha256:' + hashlib.sha256(raw).hexdigest()
+
+
+def capture(registry, ref, repository, run_id, attempt, commit, version):
+    require(repository == REPOSITORY, 'unexpected repository')
+    require(SHA.fullmatch(commit), 'invalid commit')
+    require(VERSION.fullmatch(version), 'invalid version')
+    require(run_id.isdigit() and attempt.isdigit(), 'invalid run identity')
+    require(ref.startswith(IMAGE + ':') or ref.startswith(IMAGE + '@'), 'unexpected image')
+    digest = manifest_digest(registry.raw(ref))
+    if '@' in ref:
+        require(ref == IMAGE + '@' + digest, 'manifest digest mismatch')
+    info = registry.inspect(IMAGE + '@' + digest)
+    require(info.get('Labels', {}).get('org.opencontainers.image.revision') == commit,
+            'candidate revision differs from tested commit')
+    return dict(schema=1, repository=repository, run_id=run_id, run_attempt=attempt,
+                commit=commit, version=version, image=IMAGE, digest=digest)
+
+
+def promote(s, record, repository, run_id, attempt, commit, version):
+    expected = dict(schema=1, repository=repository, run_id=run_id,
+                    run_attempt=attempt, commit=commit, version=version,
+                    image=IMAGE, digest=record.get('digest', ''))
+    require(repository == REPOSITORY and record == expected,
+            'tested record identity mismatch')
+    require(DIGEST.fullmatch(record['digest']) and SHA.fullmatch(commit)
+            and VERSION.fullmatch(version), 'invalid tested record')
+    require(s.git('rev-parse', 'HEAD') == commit, 'checkout differs from tested commit')
+    if not s.is_current(commit):
+        return 'superseded: no publication'
+    source = IMAGE + '@' + record['digest']
+    require(manifest_digest(s.raw(source)) == record['digest'], 'source digest mismatch')
+    require(s.inspect(source).get('Labels', {}).get('org.opencontainers.image.revision') == commit,
+            'source revision mismatch')
+    target = IMAGE + ':' + version
+    raw = s.raw(target, missing=True)
+    revision = commit
+    if raw is not None:
+        published = manifest_digest(raw)
+        revision = s.inspect(IMAGE + '@' + published).get('Labels', {}).get(
+            'org.opencontainers.image.revision', '')
+        require(SHA.fullmatch(revision), 'published image has no valid revision')
+        s.git('merge-base', '--is-ancestor', revision, commit)
+        require(s.git('show', revision + ':CATALOG_VERSION') == version,
+                'published image has another catalog version')
+        # Import the real contract, never maintain a second RELEASE_PATHS list.
+        import runpy
+        paths = runpy.run_path(str(Path(__file__).with_name('check-catalog-version')))['RELEASE_PATHS']
+        require(not s.git('diff', '--name-only', revision, commit, '--', *paths),
+                'version tag conflicts with changed release inputs')
+        # Same revision must always identify the same tested artifact.
+        require(revision != commit or published == record['digest'],
+                'version tag conflicts with tested digest')
+    tag = s.tag_commit(version)
+    require(tag is None or tag == revision, 'Git tag conflicts with published revision')
+    release = s.get_release(version)
+    if release is not None:
+        require(raw is not None and tag == revision and release.get('tag_name') == version
+                and release.get('draft') is False
+                and release.get('prerelease') == ('-' in version), 'existing release conflicts')
+    if not s.is_current(commit):
+        return 'superseded: no publication'
+    if raw is None:
+        s.copy(source, target)
+        require(manifest_digest(s.raw(target)) == record['digest'],
+                'copied manifest digest mismatch')
+    # Reruns recover here after an OCI copy or tag succeeded but release failed.
+    if release is None:
+        if not s.is_current(commit):
+            return 'superseded after copy: next main run repairs release'
+        publication = dict(record, published_digest=manifest_digest(raw) if raw is not None
+                           else record['digest'], published_commit=revision)
+        s.create_release(version, revision, publication)
+    require(s.tag_commit(version) == revision, 'release Git tag readback mismatch')
+    release = s.get_release(version)
+    require(release is not None and release.get('tag_name') == version
+            and release.get('draft') is False
+            and release.get('prerelease') == ('-' in version), 'release readback mismatch')
+    expected_digest = manifest_digest(raw) if raw is not None else record['digest']
+    require(manifest_digest(s.raw(target)) == expected_digest, 'final version digest mismatch')
+    return f'validated {target}@{expected_digest} at {revision}'
+
+
+class Services:
+    """Only these boundaries contact the registry / GitHub; tests use fixtures."""
+    @staticmethod
+    def command(*args):
+        result = subprocess.run(args, capture_output=True, timeout=300)
+        if result.returncode:
+            raise RuntimeError(f'{args[0]} failed (exit {result.returncode})')
+        return result.stdout
+
+    def git(self, *args):
+        return self.command('git', *args).decode().strip()
+
+    def raw(self, ref, missing=False):
+        result = subprocess.run(['skopeo', 'inspect', '--raw', 'docker://' + ref],
+                                capture_output=True, timeout=120)
+        if result.returncode:
+            # Only an explicit registry MANIFEST_UNKNOWN means absence. Auth,
+            # rate limits, timeouts, DNS and ambiguous NAME_UNKNOWN stay fatal.
+            if missing and b'manifest unknown' in result.stderr.lower():
+                return None
+            raise RuntimeError('registry manifest lookup failed')
+        return result.stdout
+
+    def inspect(self, ref):
+        return json.loads(self.command('skopeo', 'inspect', 'docker://' + ref))
+
+    def copy(self, source, target):
+        self.command('skopeo', 'copy', '--all', '--preserve-digests',
+                     'docker://' + source, 'docker://' + target)
+
+    def api(self, path, payload=None, missing=False):
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+        require(path.startswith('repos/' + REPOSITORY + '/'), 'unexpected API target')
+        request = Request('https://api.github.com/' + path,
+                          data=json.dumps(payload).encode() if payload is not None else None,
+                          headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                                   'Accept': 'application/vnd.github+json',
+                                   'Content-Type': 'application/json',
+                                   'X-GitHub-Api-Version': '2022-11-28'})
+        try:
+            with urlopen(request, timeout=60) as response:
+                return json.load(response)
+        except HTTPError as error:
+            if missing and error.code == 404:
+                return None
+            raise RuntimeError(f'GitHub request failed (HTTP {error.code})') from None
+
+    def tag_commit(self, version):
+        obj = self.api(f'repos/{REPOSITORY}/git/ref/tags/{version}', missing=True)
+        if obj is None:
+            return None
+        obj = obj['object']
+        for _ in range(5):
+            if obj['type'] == 'commit':
+                require(SHA.fullmatch(obj['sha']), 'invalid Git tag SHA')
+                return obj['sha']
+            require(obj['type'] == 'tag', 'unexpected Git tag target')
+            obj = self.api(f'repos/{REPOSITORY}/git/tags/{obj["sha"]}')['object']
+        raise ValueError('excessively nested annotated tag')
+
+    def get_release(self, version):
+        return self.api(f'repos/{REPOSITORY}/releases/tags/{version}', missing=True)
+
+    def create_release(self, version, revision, record):
+        self.api(f'repos/{REPOSITORY}/releases', dict(
+            tag_name=version, target_commitish=revision, name=version,
+            draft=False, prerelease='-' in version,
+            make_latest='false' if '-' in version else 'true',
+            body='Validated module publication. Tested run record:\n\n```json\n'
+                 + json.dumps(record, sort_keys=True, indent=2) + '\n```'))
+
+    def is_current(self, commit):
+        return self.git('ls-remote', '--exit-code', 'origin', 'refs/heads/main').split()[0] == commit
+
+
+def validated_run(runs, commit):
+    candidates = [run for run in runs if
+                  run.get('path') == '.github/workflows/validate.yml'
+                  and run.get('event') == 'push' and run.get('head_sha') == commit
+                  and run.get('head_repository', {}).get('full_name') == REPOSITORY]
+    if not candidates:
+        return False
+    newest = max(candidates, key=lambda run: (run['run_number'], run['run_attempt']))
+    if newest.get('status') != 'completed':
+        return False
+    require(newest.get('conclusion') == 'success', 'same-commit Validate did not succeed')
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=['capture', 'promote', 'checks'])
+    parser.add_argument('--image')
+    parser.add_argument('--record', default='tested-image.json')
+    args = parser.parse_args()
+    s = Services()
+    if args.mode == 'checks':
+        import time
+        commit = os.environ['TESTED_SHA']
+        require(SHA.fullmatch(commit), 'invalid tested SHA')
+        for _ in range(80):
+            runs = s.api(f'repos/{REPOSITORY}/actions/runs?head_sha={commit}&event=push&per_page=100')
+            if validated_run(runs['workflow_runs'], commit):
+                print('Same-commit Validate (static + UI) succeeded')
+                return
+            time.sleep(15)
+        raise RuntimeError('same-commit Validate did not finish within 20 minutes')
+    identity = [os.environ[key] for key in
+                ('TESTED_REPOSITORY', 'TESTED_RUN_ID', 'TESTED_RUN_ATTEMPT', 'TESTED_SHA')]
+    version = Path('CATALOG_VERSION').read_text().strip()
+    if args.mode == 'capture':
+        require(args.image is not None, 'image is required')
+        record = capture(s, args.image, *identity, version)
+        Path(args.record).write_text(json.dumps(record, sort_keys=True) + '\n')
+        if os.environ.get('GITHUB_OUTPUT'):
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+                out.write(f'digest={record["digest"]}\nreference={IMAGE}@{record["digest"]}\n')
+        print(json.dumps(record, sort_keys=True))
+    else:
+        record = json.loads(Path(args.record).read_text())
+        print(promote(s, record, *identity, version))
+
+
+if __name__ == '__main__':
+    main()
