@@ -4,7 +4,7 @@
     "config:recommended"
   ],
   "automerge": false,
-  "dependencyDashboard": true,
+  "dependencyDashboard": {"enabled": true},
   "rebaseWhen": "behind-base-branch",
   "prConcurrentLimit": 2,
   "prHourlyLimit": 2,
