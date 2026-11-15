@@ -45,6 +45,13 @@
   ],
   "packageRules": [
     {
+      "description": "Hosted runners stay on ubuntu-24.04 across the NS8 module repos (shared release contract); move all repos together, then drop this rule",
+      "matchManagers": ["github-actions"],
+      "matchDepTypes": ["github-runner"],
+      "matchPackageNames": ["ubuntu"],
+      "allowedVersions": "<26"
+    },
+    {
       "description": "NethServer/ns8-github-actions publishes v1 as a branch, not a tag: pin the workflow commit and look up the new digest as a git ref (otherwise: 'Could not determine new digest for update')",
       "matchManagers": ["github-actions"],
       "matchPackageNames": ["NethServer/ns8-github-actions"],
